@@ -20,6 +20,7 @@ import os
 import json
 import httpx
 from mcp.server.fastmcp import FastMCP
+from character_tools import execute_memory_tool
 
 # ============================================================
 # 配置
@@ -31,6 +32,8 @@ MCP_AUTH_TOKEN = os.getenv("MCP_AUTH_TOKEN", "")
 
 # kiwi-mem 网关已移除访问密码，内部调用无需带认证头
 GATEWAY_HEADERS = {}
+if os.getenv("KIWI_WORKER_TOKEN"):
+    GATEWAY_HEADERS["X-Kiwi-Worker-Token"] = os.environ["KIWI_WORKER_TOKEN"]
 
 
 # ============================================================
@@ -53,6 +56,8 @@ async def search_memory(query: str, limit: int = 10) -> str:
 
     返回匹配的记忆列表，每条包含标题、内容、重要度、日期。
     """
+    if os.getenv("KIWI_CHARACTER_ID"):
+        return await execute_memory_tool("search_memory", {"query": query, "limit": limit})
     if limit > 50:
         limit = 50
 
@@ -106,6 +111,8 @@ async def save_memory(content: str, title: str = "", importance: int = 5) -> str
 
     记忆保存后会自动生成向量，可以被语义搜索找到。
     """
+    if os.getenv("KIWI_CHARACTER_ID"):
+        return await execute_memory_tool("save_memory", {"content": content, "title": title, "importance": importance})
     if not content.strip():
         return "内容不能为空。"
 
@@ -149,6 +156,8 @@ async def get_recent(limit: int = 20) -> str:
 
     用于快速了解最近发生了什么、最近聊了什么。
     """
+    if os.getenv("KIWI_CHARACTER_ID"):
+        return await execute_memory_tool("get_recent", {"limit": limit})
     if limit > 50:
         limit = 50
 
@@ -229,6 +238,8 @@ async def lock_memory(memory_id: int) -> str:
 
     用于标记核心记忆，比如重要的个人信息、关键决定、重要约定。
     """
+    if os.getenv("KIWI_CHARACTER_ID"):
+        return await execute_memory_tool("lock_memory", {"memory_id": memory_id})
     try:
         async with httpx.AsyncClient(timeout=10, headers=GATEWAY_HEADERS) as client:
             resp = await client.post(
@@ -258,6 +269,8 @@ async def unlock_memory(memory_id: int) -> str:
 
     用于取消之前锁定的记忆，让它回到正常的遗忘曲线。
     """
+    if os.getenv("KIWI_CHARACTER_ID"):
+        return await execute_memory_tool("unlock_memory", {"memory_id": memory_id})
     try:
         async with httpx.AsyncClient(timeout=10, headers=GATEWAY_HEADERS) as client:
             resp = await client.post(

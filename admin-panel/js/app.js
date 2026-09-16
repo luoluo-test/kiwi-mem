@@ -22,6 +22,19 @@ import {
 } from './nav-visibility.mjs';
 
 const DEFAULT_ROUTE = 'dashboard';
+const activeCharacter = window.location.pathname.match(/^\/characters\/([A-Za-z0-9_-]{1,128})\//)?.[1];
+if (activeCharacter) {
+  document.title = `Kiwi-Mem · ${activeCharacter}`;
+  const subtitle = document.querySelector('.sidebar-head .sub');
+  if (subtitle) subtitle.textContent = `角色：${activeCharacter}`;
+  const footer = document.querySelector('.sidebar-foot');
+  if (footer) {
+    const link = document.createElement('a');
+    link.href = '/character-manager';
+    link.textContent = '角色管理';
+    footer.append(link);
+  }
+}
 
 // 已从管理面板移除的旧路由 → key:中文名。命中后给明确提示，不再静默跳仪表盘。
 const REMOVED = {

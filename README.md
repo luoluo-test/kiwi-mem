@@ -4,6 +4,17 @@
 
 [English Version →](README_EN.md)
 
+### 本地多角色隔离扩展（未发布）
+
+本分支可用一个入口管理多个角色，使用每角色独立数据库和工作进程隔离记忆、画像、日历、Dream、工具及缓存。
+设置 `KIWI_CHARACTER_ISOLATION=true` 后，访问 `/character-manager` 创建角色，
+通过 `/characters/{稳定角色ID}/v1/chat/completions` 聊天。旧请求仅进入独立的 `default`，不会向新角色共享旧记忆。
+辅助生成请求使用 `memory_mode: "auxiliary"`，避免落账和工具写入。
+
+此扩展需要 PostgreSQL 建库权限并增加每角色资源占用；角色 ID 不提供用户鉴权。
+默认关闭以保留旧启动行为。启用前请阅读 [迁移、接口和维护合同](docs/character-isolation.md)，
+以及 [本地验证记录](docs/character-isolation-verification.md)。float 尚未接入。
+
 ---
 
 ## 它做了什么

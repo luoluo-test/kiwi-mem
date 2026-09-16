@@ -3246,7 +3246,7 @@ async def _keyword_search(query: str, limit: int = 10, heat_params: dict = None,
 # 常用查询
 # ============================================================
 
-async def get_recent_memories(limit: int = 20, category_id: int = None, project_id: str = None):
+async def get_recent_memories(limit: int = 20, category_id: int = None, project_id: str = None, *, global_only: bool = False):
     """
     最近记忆。
     project_id 语义（保持与本函数原有调用方一致）：
@@ -3273,6 +3273,8 @@ async def get_recent_memories(limit: int = 20, category_id: int = None, project_
         # 必须参数化, 否则 project_id 来自客户端 body, 直接 f-string 拼会被 SQL 注入
         params.append(project_id)
         where_extra += f" AND m.project_id = ${len(params)}"
+    elif global_only:
+        where_extra += " AND m.project_id IS NULL"
     params.append(limit)
     sql = f"{base_select}{where_extra} ORDER BY m.created_at DESC LIMIT ${len(params)}"
     async with pool.acquire() as conn:

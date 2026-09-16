@@ -6,7 +6,9 @@
 // jfetch 在「响应含真值 error 键 或 HTTP>=400」时 throw。
 // ============================================================
 
-export const API = window.location.origin;
+// Role selection is fixed by this tab's URL, never shared localStorage/cookies.
+const rolePrefix = window.location.pathname.match(/^\/characters\/([A-Za-z0-9_-]{1,128})(?:\/|$)/);
+export const API = window.location.origin + (rolePrefix ? `/characters/${rolePrefix[1]}` : '');
 
 export async function request(path, { method = 'GET', body, headers, signal } = {}) {
   const opts = { method, headers: { ...(headers || {}) }, signal };

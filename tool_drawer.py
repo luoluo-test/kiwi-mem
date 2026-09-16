@@ -1156,6 +1156,14 @@ async def handle_meta_tool(
 
 async def execute_drawer_tool(tool_name, arguments, scope=None):
     extra = {}
+    import os
+    if os.getenv("KIWI_CHARACTER_ID"):
+        from character_tools import MEMORY_TOOLS, execute_memory_tool
+        if tool_name in MEMORY_TOOLS:
+            try:
+                return await execute_memory_tool(tool_name, arguments, scope), extra
+            except (TypeError, ValueError, KeyError):
+                return '[tool_error] {"code":"invalid_tool_arguments"}', extra
     category = _tool_to_category.get(tool_name) or GATEWAY_CATEGORY_MAP.get(tool_name)
     if (_scope_mode(scope) == "quarantined_project"
             and (category in {"memory", "conversation"}
