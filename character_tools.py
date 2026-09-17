@@ -1,5 +1,6 @@
 """Project-aware memory tools inside an already isolated character worker."""
 import json
+import os
 
 MEMORY_TOOLS = {"search_memory", "save_memory", "get_recent", "lock_memory", "unlock_memory"}
 
@@ -52,3 +53,17 @@ async def execute_memory_tool(name, args, scope=None):
         """, int(args["memory_id"]), name == "lock_memory",
             "user" if name == "lock_memory" else None, project)
     return json.dumps({"status": "updated"} if result != "UPDATE 0" else {"code": "memory_not_found"})
+
+
+# These stores have no project column. Project models may read the shared
+# foundation, but may not write private project facts back into it.
+GLOBAL_WRITE_TOOLS = frozenset({
+    "save_calendar_page", "add_comment", "trigger_digest", "trigger_dream", "stop_dream",
+    "_gateway_create_reminder", "_gateway_complete_reminder", "_gateway_delete_reminder",
+})
+
+
+def project_tool_allowed(name, scope):
+    return not (os.getenv("KIWI_CHARACTER_ID") and
+                (scope or {}).get("context_mode", "global") != "global" and
+                name in GLOBAL_WRITE_TOOLS)

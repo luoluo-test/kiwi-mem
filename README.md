@@ -10,6 +10,8 @@
 设置 `KIWI_CHARACTER_ISOLATION=true` 后，访问 `/character-manager` 创建角色，
 通过 `/characters/{稳定角色ID}/v1/chat/completions` 聊天。旧请求仅进入独立的 `default`，不会向新角色共享旧记忆。
 辅助生成请求使用 `memory_mode: "auxiliary"`，避免落账和工具写入。
+角色模式的会话项目归属在聊天和同步写入中统一固定；项目聊天不能写全局日历等共享底座。
+一键更新脚本遇到多角色模式或保留的角色库会停止，必须先按维护文档备份全部角色库再手工升级。
 
 此扩展需要 PostgreSQL 建库权限并增加每角色资源占用；角色 ID 不提供用户鉴权。
 默认关闭以保留旧启动行为。启用前请阅读 [迁移、接口和维护合同](docs/character-isolation.md)，

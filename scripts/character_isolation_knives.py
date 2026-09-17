@@ -7,6 +7,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MUTATIONS = [
+    ("session response header hidden from browsers", "character_gateway.py",
+     'expose_headers=["X-Kiwi-Character", "X-Kiwi-Session-Id"]', 'expose_headers=["X-Kiwi-Character"]'),
+    ("JSON selector media variants rejected", "character_gateway.py",
+     'elif not media or media == "application/json" or (media.startswith("application/") and media.endswith("+json")):',
+     'elif media == "application/json":'),
+    ("delete skips selector consistency", "character_gateway.py",
+     'async def delete_character(cid: str, request: Request):\n        await request_identity(request, cid)',
+     'async def delete_character(cid: str, request: Request):'),
     ("role routing defaults every request", "character_gateway.py",
      'return candidates[0] if candidates else "default"', 'return "default"'),
     ("worker token validation removed", "character_boundary.py",
@@ -31,4 +39,4 @@ for label, filename, old, new in MUTATIONS:
         if result.returncode == 0 or "FAIL" not in result.stderr:
             raise AssertionError(f"mutation survived or did not reach assertions: {label}\n{result.stderr}")
         print("KILLED:", label)
-print("PASS: 3 character isolation mutations rejected; working source never modified")
+print("PASS: 6 character isolation mutations rejected; working source never modified")

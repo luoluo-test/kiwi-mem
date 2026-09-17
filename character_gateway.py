@@ -47,6 +47,32 @@ def select_character(*, path_id=None, header_id=None, body=None):
     return candidates[0] if candidates else "default"
 
 
+async def request_identity(request, path_id=None, *, allow_upload=False):
+    """Parse every accepted body before selecting a role; never ignore JSON selectors."""
+    headers = request.headers
+    if any(k in request.query_params for k in ("character_id", "characterId")):
+        raise CharacterError("character_query_selector_not_supported")
+    if len(headers.getlist("x-kiwi-character")) > 1:
+        raise CharacterError("duplicate_character_header")
+    raw = await request.body()
+    body = None
+    if raw:
+        media = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if allow_upload and media == "multipart/form-data":
+            pass  # Upload ownership is supplied by path/header and checked in its manifest.
+        elif not media or media == "application/json" or (media.startswith("application/") and media.endswith("+json")):
+            try:
+                body = json.loads(raw)
+            except (ValueError, UnicodeDecodeError):
+                raise CharacterError("invalid_json")
+            if not isinstance(body, dict):
+                raise CharacterError("invalid_json")
+        else:
+            raise CharacterError("unsupported_media_type", 415)
+    cid = select_character(path_id=path_id, header_id=headers.get("x-kiwi-character"), body=body)
+    return cid, raw, body
+
+
 def database_url_for(base, name):
     parts = urlsplit(base)
     if parts.scheme not in ("postgres", "postgresql") or not parts.hostname:
@@ -279,7 +305,7 @@ def create_app(registry=None, manager=None):
     app.add_middleware(CORSMiddleware,
                        allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
                        allow_methods=["*"], allow_headers=["*"],
-                       expose_headers=["X-Kiwi-Character"])
+                       expose_headers=["X-Kiwi-Character", "X-Kiwi-Session-Id"])
 
     @app.exception_handler(CharacterError)
     async def character_error(request, exc):
@@ -301,11 +327,8 @@ def create_app(registry=None, manager=None):
         return FileResponse(Path(__file__).parent / "admin-panel" / "characters.html",
                             headers={"Cache-Control": "no-store"})
 
-    async def metadata(request):
-        try:
-            body = await request.json()
-        except ValueError:
-            raise CharacterError("invalid_json")
+    async def metadata(request, path_id=None):
+        _, _, body = await request_identity(request, path_id)
         if not isinstance(body, dict):
             raise CharacterError("invalid_json")
         name = body.get("name")
@@ -317,44 +340,36 @@ def create_app(registry=None, manager=None):
     async def create_character(request: Request):
         body, name = await metadata(request)
         cid = validate_character(body.get("id"))
+        select_character(path_id=cid, header_id=request.headers.get("x-kiwi-character"), body=body)
         row = await registry.create(cid, name)
         await manager.get(cid)
         return public_character(row)
 
     @app.get("/characters/{cid}")
-    async def get_character(cid: str):
+    async def get_character(cid: str, request: Request):
+        await request_identity(request, cid)
         return public_character(await registry.get(validate_character(cid)))
 
     @app.patch("/characters/{cid}")
     async def rename_character(cid: str, request: Request):
-        body, name = await metadata(request)
+        body, name = await metadata(request, cid)
+        body.pop("character_id", None)
+        body.pop("characterId", None)
         if set(body) != {"name"}:
             raise CharacterError("immutable_character_identity")
         await registry.rename(validate_character(cid), name)
         return public_character(await registry.get(cid))
 
     @app.delete("/characters/{cid}")
-    async def delete_character(cid: str):
+    async def delete_character(cid: str, request: Request):
+        await request_identity(request, cid)
         await manager.disable(validate_character(cid))
         return {"status": "disabled", "data_retained": True}
 
     async def proxy(request, path, path_id=None):
-        # Encoded separators/dot segments are not role selectors.
         headers = request.headers
-        if any(k in request.query_params for k in ("character_id", "characterId")):
-            raise CharacterError("character_query_selector_not_supported")
-        if len(headers.getlist("x-kiwi-character")) > 1:
-            raise CharacterError("duplicate_character_header")
-        raw = await request.body()
-        body = None
-        if raw and "application/json" in headers.get("content-type", ""):
-            try:
-                body = json.loads(raw)
-            except (ValueError, UnicodeDecodeError):
-                raise CharacterError("invalid_json")
-            if not isinstance(body, dict):
-                raise CharacterError("invalid_json")
-        cid = select_character(path_id=path_id, header_id=headers.get("x-kiwi-character"), body=body)
+        cid, raw, body = await request_identity(request, path_id,
+                                               allow_upload=path in {"sync/import-backup", "v1/files/extract"})
         if path_id is None and path in ("admin", "admin/"):
             from fastapi.responses import RedirectResponse
             await registry.get(cid)

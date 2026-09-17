@@ -102,6 +102,57 @@ class FakeManager:
 
 
 class RoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_json_media_types_keep_explicit_role(self):
+        for media in (None, 'Application/JSON', 'application/vnd.api+json'):
+            headers = {} if media is None else {'Content-Type': media}
+            response = await self.client.post('/debug/memories',
+                content=json.dumps({'character_id': 'A', 'content': 'private'}), headers=headers)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers['X-Kiwi-Character'], 'A')
+        response = await self.client.post('/debug/memories', content='{"character_id":"A"}',
+                                          headers={'Content-Type': 'text/plain'})
+        self.assertEqual(response.status_code, 415)
+
+    async def test_registry_conflicts_do_not_delete(self):
+        for method in ('GET', 'DELETE'):
+            r = await self.client.request(method, '/characters/A', headers={'X-Kiwi-Character': 'B'})
+            self.assertEqual(r.status_code, 409)
+        self.assertEqual(self.registry.rows['A']['state'], 'active')
+
+    async def test_registry_body_and_creation_conflicts_are_rejected(self):
+        for method, path, body in (
+            ('DELETE', '/characters/A', {'character_id':'B'}),
+            ('PATCH', '/characters/A', {'name':'renamed', 'character_id':'B'}),
+            ('POST', '/characters', {'id':'A', 'name':'A', 'character_id':'B'}),
+        ):
+            r = await self.client.request(method, path, json=body)
+            self.assertEqual(r.status_code, 409)
+        self.assertEqual(self.registry.rows['A']['state'], 'active')
+
+    async def test_nonstandard_json_still_rejects_invalid_and_conflicting_roles(self):
+        for media in ('Application/JSON', 'application/problem+json'):
+            for path, body, status in (
+                ('/debug/memories', {'character_id':None}, 400),
+                ('/debug/memories', {'character_id':'missing'}, 404),
+                ('/characters/A/debug/memories', {'character_id':'B'}, 409),
+            ):
+                r = await self.client.post(path, content=json.dumps(body), headers={'Content-Type':media})
+                self.assertEqual(r.status_code, status)
+        self.assertEqual(self.manager.calls, [])
+
+    async def test_scoped_upload_routes_remain_available(self):
+        await self.manager.client.aclose()
+        self.manager.client = httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json={'role':r.headers['x-kiwi-character']})))
+        for path in ('sync/import-backup', 'v1/files/extract'):
+            r = await self.client.post('/characters/A/' + path, files={'file':('test.txt', b'test')})
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.json()['role'], 'A')
+
+    async def test_session_header_remains_browser_readable(self):
+        r = await self.client.get('/characters/A/debug/memories', headers={'Origin': 'https://float.example'})
+        self.assertIn('X-Kiwi-Session-Id', r.headers['access-control-expose-headers'])
+
     async def asyncSetUp(self):
         self.registry = FakeRegistry()
         self.manager = FakeManager(self.registry)

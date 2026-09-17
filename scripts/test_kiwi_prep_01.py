@@ -290,10 +290,15 @@ class UpdateGuards(unittest.TestCase):
                 self.assertEqual(f.head(),f.prev)
                 (f.repo/'.env').write_text('MCP_ALLOWED_HOSTS="[2001:db8::1]:*"\r\n')
                 r=f.run('--auto')
+                self.assertEqual(r.returncode,1,r.stdout)  # MCP fallback passes; backup scope is unverifiable.
+                self.assertEqual(f.head(),f.prev)
+                f.control.update(compose_fail=False, hosts='[2001:db8::1]:*')
+                f.save()
+                r=f.run('--auto')
                 self.assertEqual(r.returncode,0,r.stdout)
                 self.assertEqual(f.head(),target)
                 self.assertEqual((f.root/'executed').read_text().splitlines(),['new-script'])
-                self.assertEqual(sum(c[1][:2]==['compose','exec'] for c in f.calls()),1)
+                self.assertEqual(sum(c[1][:2]==['compose','exec'] and 'pg_dump' in ' '.join(c[1]) for c in f.calls()),1)
                 self.assertFalse((f.repo/'.update-state.json').exists())
                 calls=[c[1] for c in f.calls(http) if any(x.endswith('/memory/mcp') for x in c[1])]
                 self.assertEqual(len(calls),1)
@@ -388,6 +393,16 @@ class UpdateGuards(unittest.TestCase):
                 print('OBSERVATION: real compose export prefix published='+str(actual))
         else: print('BLOCKED: real compose config unavailable locally')
 
+    def test_character_update_blocks_before_backup_or_merge(self):
+        for control in ({'character_mode':True}, {'character_databases':2}):
+            f = self.fixture(foreign=False, **control)
+            f.target(False)
+            r = f.run('--yes', '--force', '--no-backup')
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertEqual(f.head(), f.prev)
+            self.assertFalse((f.repo/'backups').exists())
+            self.assertFalse(any(c[1][:2] == ['compose','up'] for c in f.calls()))
+
     def test_T_PREP_01_06_three_conditions(self):
         f = self.fixture(); f.target()
         r = f.run('--auto')
@@ -409,7 +424,10 @@ class UpdateGuards(unittest.TestCase):
             f=self.fixture(**control); target=f.target()
             (f.repo/'.env').write_text(env)
             if shell is not None: f.env['MCP_ALLOWED_HOSTS']=shell
-            r=f.run('--auto'); self.assertEqual(r.returncode,0,r.stdout); self.assertEqual(f.head(),target)
+            r=f.run('--auto')
+            blocked = control.get('compose_fail', False)
+            self.assertEqual(r.returncode, 1 if blocked else 0, r.stdout)
+            self.assertEqual(f.head(), f.prev if blocked else target)
         f=self.fixture(compose_fail=True); f.target()
         sentinel=f.root/'PWNED'
         (f.repo/'.env').write_text('MCP_ALLOWED_HOSTS=$(touch "'+sentinel.as_posix()+'")\n')
@@ -418,7 +436,8 @@ class UpdateGuards(unittest.TestCase):
         self.assertEqual(r.returncode,3,r.stdout)
         # Real user flow: change only pending dotenv, then retry.
         (f.repo/'.env').write_text('MCP_ALLOWED_HOSTS=wrong-but-valid.example\n')
-        r=f.run('--auto'); self.assertEqual(r.returncode,0,r.stdout)
+        r=f.run('--auto'); self.assertEqual(r.returncode,1,r.stdout)
+        self.assertEqual(f.head(), f.prev)
         self.assertNotIn('wrong-but-valid.example',r.stdout)
 
     def test_T_PREP_01_08_preflight_before_mutation(self):
@@ -443,7 +462,7 @@ class UpdateGuards(unittest.TestCase):
             self.assertEqual(len(builds),2 if broken else 1)
             self.assertEqual(builds[0][2],target)
             if broken: self.assertEqual(builds[-1][2],f.prev)
-            self.assertEqual(sum(c[1][:2]==['compose','exec'] for c in calls),1)
+            self.assertEqual(sum(c[1][:2]==['compose','exec'] and 'pg_dump' in ' '.join(c[1]) for c in calls),1)
             self.assertEqual(r.stdout.count('现在更新吗'),1)
             self.assertFalse((f.repo/'.update-state.json').exists())
         f=self.fixture(); f.target(False,True)

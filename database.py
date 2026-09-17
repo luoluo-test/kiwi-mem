@@ -17,6 +17,7 @@ v5.7 升级：RRF 混合检索
 """
 
 import os
+from character_boundary import CharacterScopeError
 import re
 import json
 import math
@@ -3998,6 +3999,9 @@ async def _upsert_conversation_tx(conn, conv: dict, *, restore: bool = False):
     await _lock_session(conn, session_id)
     if not restore and await _tombstone_status_tx(conn, session_id) == "session":
         raise SessionDeletedError(session_id)
+    if os.getenv("KIWI_CHARACTER_ID"):
+        from character_boundary import guard_session_project_tx, session_project_value
+        await guard_session_project_tx(conn, session_id, session_project_value(conv))
     await conn.execute("""
             INSERT INTO chat_conversations (id, title, model, provider_model_id, project_id, pinned, sort_order, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -4048,6 +4052,9 @@ async def sync_create_conversation(conv: dict) -> bool:
             await _lock_session(conn, session_id)
             if await _tombstone_status_tx(conn, session_id) == "session":
                 raise SessionDeletedError(session_id)
+            if os.getenv("KIWI_CHARACTER_ID"):
+                from character_boundary import guard_session_project_tx, session_project_value
+                await guard_session_project_tx(conn, session_id, session_project_value(conv))
             result = await conn.execute("""
             INSERT INTO chat_conversations (id, title, model, provider_model_id, project_id, pinned, sort_order)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -4089,10 +4096,20 @@ async def sync_patch_conversation(conv_id: str, fields: dict) -> str:
     set_clause = ", ".join(sets) + ", updated_at = NOW()"
     pool = await get_pool()
     async with pool.acquire() as conn:
-        result = await conn.execute(
-            f"UPDATE chat_conversations SET {set_clause} WHERE id = ${len(values)}",
-            *values,
-        )
+        async with conn.transaction():
+            await _lock_global_shared(conn)
+            await _lock_session(conn, conv_id)
+            if os.getenv("KIWI_CHARACTER_ID"):
+                from character_boundary import guard_session_project_tx, session_project_value
+                old = await conn.fetchrow("SELECT project_id FROM chat_conversations WHERE id=$1", conv_id)
+                if old is None:
+                    return "not_found"
+                project = session_project_value(fields) if any(k in fields for k in ("projectId", "project_id")) else old["project_id"]
+                await guard_session_project_tx(conn, conv_id, project)
+            result = await conn.execute(
+                f"UPDATE chat_conversations SET {set_clause} WHERE id = ${len(values)}",
+                *values,
+            )
     return "ok" if _rowcount_nonzero(result) else "not_found"
 
 
@@ -4860,6 +4877,9 @@ async def sync_delete_project(proj_id: str):
 # W2-02：import 的受控拒绝码与安全摘要。
 # 回执与日志只使用这里的固定文案，绝不回传数据库原始异常——异常文本常带列值片段。
 _IMPORT_REJECT_SUMMARIES = {
+    "invalid_project_id": "项目标识无效",
+    "invalid_project_ownership": "项目归属无效",
+    "session_project_mismatch": "会话项目归属冲突",
     "invalid_item": "条目不是 JSON 对象",
     "missing_id": "缺少非空 id",
     "duplicate_id": "同批次内 id 重复",
@@ -5049,6 +5069,8 @@ async def sync_import_all(conversations: list, projects: list):
                     "error": _IMPORT_REJECT_SUMMARIES[code],
                     "message_ids": ids,
                 })
+        except CharacterScopeError as e:
+            record_reject("conversation", cid, e.code)
         except SessionDeletedError:
             # 删除后不可复活：整条对话拒收，同批其他实体继续。
             record_reject("conversation", cid, "deleted")

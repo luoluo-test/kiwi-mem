@@ -7,10 +7,10 @@
 // 任何一步都能跳过；跳过/完成后写 localStorage，不再出现。
 // 仪表盘的配置清单会接着引导没做完的事，进度不丢。
 // ============================================================
-import { get, post, escHtml, escAttr } from './api.js';
+import { API, get, post, escHtml, escAttr } from './api.js';
 import { toast, setBusy } from './ui.js';
 
-const DONE_KEY = 'kiwi-wizard-done';
+const DONE_KEY = 'kiwi-wizard-done:' + API;
 
 export async function maybeShowWizard() {
   if (localStorage.getItem(DONE_KEY)) return;
@@ -137,7 +137,7 @@ async function renderStep2(mask, state) {
 
 // ---------- ③ 连前端 ----------
 function renderStep3(mask) {
-  const base = location.origin + '/v1';
+  const base = API + '/v1';
   mask.innerHTML = shell(3, `
     <p class="wiz-p">最后，去你的聊天软件（ChatBox / Kelivo / SillyTavern…）的供应商设置里填：</p>
     <div class="wiz-terminal">

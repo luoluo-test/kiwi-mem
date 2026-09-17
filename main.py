@@ -67,7 +67,7 @@ from config import (
     get_all_config, set_config, get_config, get_config_int, get_config_bool, get_config_float,
 )
 from memory_extractor import extract_memories
-from character_boundary import WorkerBoundary, chat_contract
+from character_boundary import WorkerBoundary, chat_contract, CharacterScopeError
 from mcp_server import get_mcp_app, get_calendar_mcp_app, mcp_memory, mcp_calendar
 from web_search import web_search, format_results_for_prompt, get_engine_list
 from mcp_client import get_tools_for_servers, call_tool, call_tools_batch, clear_tool_cache
@@ -2681,6 +2681,10 @@ async def chat_completions(request: Request):
             tool_map[t["function"]["name"]] = {"type": "gateway_builtin", "handler": "reminder"}
         print("⏰ 提醒工具已注册（常驻）")
 
+    from character_tools import project_tool_allowed
+    openai_tools = [tool for tool in openai_tools if project_tool_allowed(tool["function"]["name"], scope)]
+    tool_map = {name: dict(info, scope=scope) for name, info in tool_map.items()
+                if project_tool_allowed(name, scope)}
     tools_cache_applied = False
     if auxiliary_request:
         # Auxiliary generations cannot invoke memory/calendar/reminder write tools.
@@ -2821,6 +2825,9 @@ async def _execute_gateway_tool(tool_name: str, arguments: dict, tool_info: dict
     执行网关内置工具（联网搜索、提醒系统等）。
     返回 (result_text, extra_metadata) 元组，extra_metadata 用于 SSE 事件附加信息。
     """
+    from character_tools import project_tool_allowed
+    if not project_tool_allowed(tool_name, tool_info.get("scope")):
+        return '[tool_error] {"code":"project_global_write_forbidden"}', {}
     extra = {}
 
     if tool_name == "_gateway_web_search":
@@ -3251,7 +3258,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
 
         # 网关工具（联网搜索等）：各自并发
         async def _run_gw(p):
-            tool_info = tool_map.get(p["name"], {})
+            tool_info = dict(tool_map.get(p["name"], {}), scope=scope)
             result_text, extra_meta = await _execute_gateway_tool(p["name"], p["args"], tool_info)
             tool_results[p["id"]] = result_text
             tool_extras[p["id"]] = extra_meta
@@ -5758,6 +5765,8 @@ async def api_sync_create_conversation(request: Request):
         if warning:
             result["warning"] = warning
         return result
+    except CharacterScopeError as e:
+        return JSONResponse(status_code=e.status, content={"error": e.code, "code": e.code})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -5788,6 +5797,8 @@ async def api_sync_upsert_conversation(conv_id: str, request: Request):
         if stale:
             result["skipped_stale_summaries"] = stale
         return result
+    except CharacterScopeError as e:
+        return JSONResponse(status_code=e.status, content={"error": e.code, "code": e.code})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -5806,6 +5817,8 @@ async def api_sync_patch_conversation(conv_id: str, request: Request):
         if status == "not_found":
             return JSONResponse(status_code=404, content={"error": "对话不存在"})
         return {"status": "ok"}
+    except CharacterScopeError as e:
+        return JSONResponse(status_code=e.status, content={"error": e.code, "code": e.code})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -6147,7 +6160,7 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
         buf.seek(0)
         result = {"conversations": 0, "messages": 0, "projects": 0, "memories": 0,
                   "settings": 0, "config": 0, "failed_conversations": 0,
-                  "filtered_sourceless_handoffs": 0}
+                  "filtered_sourceless_handoffs": 0, "scope_errors": []}
 
         with zipfile.ZipFile(buf, 'r') as zf:
             names = zf.namelist()
@@ -6174,6 +6187,10 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
                     messages = conv.pop("messages", None)
                     try:
                         filtered = await restore_conversation_from_backup(conv, messages)
+                    except CharacterScopeError as e:
+                        result["failed_conversations"] += 1
+                        result["scope_errors"].append(e.code)
+                        continue
                     except Exception as e:
                         result["failed_conversations"] += 1
                         print(f"event=backup_restore_failed "

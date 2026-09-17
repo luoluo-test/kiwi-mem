@@ -76,13 +76,17 @@ jobs:
           node scripts/test_admin_panel_nav.mjs
           node scripts/test_calendar_period_defaults.mjs
           python scripts/test_character_isolation.py
+          python scripts/test_character_tool_scope.py
+          python scripts/test_character_update_guard.py
           node scripts/test_character_panel.mjs
 
       - name: 运行 S1-S6 永久真库行为守卫
         run: python scripts/test_kiwi_safety_sync.py
 
       - name: 角色隔离真库与进程守卫（模拟模型）
-        run: python scripts/test_character_postgres.py
+        run: |
+          python scripts/test_character_postgres.py
+          python scripts/test_character_scope_regressions.py
 
       - name: 运行 PREP-01 应用侧守卫
         if: ${{ !cancelled() && steps.prep-dependencies.outcome == 'success' }}
