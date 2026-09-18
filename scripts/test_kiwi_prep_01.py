@@ -32,6 +32,7 @@ os.environ["DATABASE_URL"] = "postgresql://unused:unused@127.0.0.1:1/unused"
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from mcp.server.fastmcp import FastMCP
+from kiwi_version import VERSION, UPSTREAM_VERSION
 
 INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
     "protocolVersion": "2025-06-18", "capabilities": {},
@@ -149,7 +150,7 @@ class ApplicationGuards(unittest.TestCase):
                 self.assertIs(type(result[key]), int)
                 self.assertEqual(result[key], 2)
             self.assertEqual(result["protection"], "preview")
-            self.assertEqual(result["version"], "1.7.0")
+            self.assertEqual(result["version"], VERSION)
             self.assertIs(result["ip_literal_allowed"], True)
             self.assertIs(result["foreign_host_seen"], False)
             self.assertIsNone(result["foreign_host_last_seen_at"])
@@ -514,8 +515,10 @@ class DeliveryGuards(unittest.TestCase):
                 for token in tokens: self.assertIn(token,text)
         p=ROOT/'scripts/upgrade_gates.json'; self.assertTrue(p.exists())
         self.assertIs(json.loads(p.read_text(encoding='utf-8'))['gates']['mcp_access_control'],False)
-        text=(ROOT/'main.py').read_text(encoding='utf-8')
-        self.assertIn('VERSION = "1.7.0"',text); self.assertIn('version="1.7.0"',text)
+        import main
+        self.assertEqual(UPSTREAM_VERSION, "1.7.0")
+        self.assertEqual(main.VERSION, VERSION)
+        self.assertEqual(main.app.version, VERSION)
         # PREP must coexist with SEC-01a in the release integration tree.
         content=(ROOT/'mcp_server.py').read_text(encoding='utf-8-sig')
         calls=[n for n in ast.walk(ast.parse(content)) if isinstance(n,ast.Call)

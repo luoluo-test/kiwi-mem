@@ -105,6 +105,7 @@ def observe_mcp_access(app):
 
 async def mcp_access_status():
     from starlette.responses import JSONResponse
+    from kiwi_version import VERSION
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
@@ -113,7 +114,7 @@ async def mcp_access_status():
         return {'protection': 'preview', **read_allowlists(), 'ip_literal_allowed': True,
                 'foreign_host_seen': bool(row and row['foreign_host_seen']),
                 'foreign_host_last_seen_at': timestamp.isoformat() if timestamp else None,
-                'version': '1.7.0'}
+                'version': VERSION}
     except Exception:
         return JSONResponse({'error': 'internal_error', 'error_code': 'internal_error'}, status_code=500)
 

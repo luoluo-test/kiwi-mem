@@ -26,7 +26,7 @@ MUTATIONS = [
 for label, filename, old, new in MUTATIONS:
     with tempfile.TemporaryDirectory(prefix="kiwi-character-knife-") as folder:
         target = Path(folder)
-        for name in ("character_gateway.py", "character_boundary.py"):
+        for name in ("character_gateway.py", "character_boundary.py", "kiwi_version.py"):
             shutil.copy2(ROOT / name, target / name)
         (target / "scripts").mkdir()
         shutil.copy2(ROOT / "scripts/test_character_isolation.py", target / "scripts")

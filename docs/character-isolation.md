@@ -1,14 +1,16 @@
 # 多角色隔离维护与接口合同
 
-状态：本地开发功能，尚未发布。版本仍为上游 1.7.0，不代表新版本通过发布验收。
+状态：二改开发快照 **`v1.7.0-luoluo.1`**，基于上游 `v1.7.0`；未通过正式发布验收。
+准确基线、版本对应关系与后续同步规则见 [二改版本维护说明](fork-maintenance.md)。
 
 ## 来源与维护
 
 - 上游：<https://github.com/LucieEveille/kiwi-mem>
-- 基线：`b01a0c506f4f10f90f30d408c0291f16720f0718`（2026-09-16 读取 remote main）。
+- 基线：`b01a0c506f4f10f90f30d408c0291f16720f0718`（2026-09-16 读取 remote main；2026-09-18 核实为上游 `v1.7.0` 标签实际指向的提交）。
 - 初始目录没有 `.git`；抓取上游历史后，以 mixed reset 建立索引而不覆盖文件。
   `git status --short` 为空，确认下载包全部受跟踪文件与该提交一致。
-- 功能分支：`codex/character-isolation`。仅本地开发、验证；没有推送、PR、部署或生产迁移。
+- 二改仓库：<https://github.com/luoluo-test/kiwi-mem>；功能分支：`codex/character-isolation`。
+  已上传功能分支并建立 [Draft PR #1](https://github.com/luoluo-test/kiwi-mem/pull/1)；未合并、部署或迁移生产数据。
 - float 只读取了维护记录和 `lib/memory-storage.ts`；未修改，也未完成双方互通。
 
 优先保留上游实现：新增 `character_gateway.py` 管注册表、进程及转发；

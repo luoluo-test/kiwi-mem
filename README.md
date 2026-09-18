@@ -4,7 +4,12 @@
 
 [English Version →](README_EN.md)
 
-### 本地多角色隔离扩展（未发布）
+### Luoluo 多角色隔离版 · v1.7.0-luoluo.1
+
+本二改版本为 **`v1.7.0-luoluo.1`**，基于 [LucieEveille/kiwi-mem v1.7.0](https://github.com/LucieEveille/kiwi-mem/tree/v1.7.0)，
+上游准确提交为 [`b01a0c5`](https://github.com/LucieEveille/kiwi-mem/commit/b01a0c506f4f10f90f30d408c0291f16720f0718)。
+这是用于追踪代码的开发快照标签，尚未通过正式发布验收。
+版本对应关系与后续同步规则见 [二改版本维护说明](docs/fork-maintenance.md)。
 
 本分支可用一个入口管理多个角色，使用每角色独立数据库和工作进程隔离记忆、画像、日历、Dream、工具及缓存。
 设置 `KIWI_CHARACTER_ISOLATION=true` 后，访问 `/character-manager` 创建角色，

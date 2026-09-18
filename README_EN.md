@@ -4,6 +4,16 @@
 
 [中文版 →](README.md)
 
+### Luoluo multi-character isolation fork · v1.7.0-luoluo.1
+
+This fork snapshot is **`v1.7.0-luoluo.1`**, based on
+[LucieEveille/kiwi-mem v1.7.0](https://github.com/LucieEveille/kiwi-mem/tree/v1.7.0),
+upstream commit [`b01a0c5`](https://github.com/LucieEveille/kiwi-mem/commit/b01a0c506f4f10f90f30d408c0291f16720f0718).
+The tag identifies a development snapshot; it does not certify release acceptance.
+See [fork version and upstream tracking](docs/fork-maintenance.md) and
+[character isolation, migration and API contract](docs/character-isolation.md) (Chinese).
+The isolation mode is opt-in, uses one database and worker process per character, and has not yet been integrated with float.
+
 ---
 
 ## What it does

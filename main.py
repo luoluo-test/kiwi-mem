@@ -76,14 +76,13 @@ from anthropic_adapter import (
     from_anthropic_response, anthropic_stream_to_openai,
 )
 from mcp_access import observe_mcp_access, mcp_access_status, log_mcp_access_preview
+from kiwi_version import VERSION, UPSTREAM_VERSION, UPSTREAM_TAG, UPSTREAM_COMMIT, UPSTREAM_REPOSITORY
 
 # ============================================================
 # 配置项 —— 全部从环境变量读取，部署时在云平台面板里设置
 # ============================================================
 
-# 版本号。管理面板顶栏/侧栏读 GET / 的 version 字段显示，
-# 只此一处定义，避免两处字符串各说各话。
-VERSION = "1.7.0"
+# 版本与上游基线统一定义于 kiwi_version.py；管理面板读取 GET / 的 version。
 
 # 你的 API Key（OpenRouter / OpenAI / 其他兼容服务）
 API_KEY = os.getenv("API_KEY", "")
@@ -325,7 +324,7 @@ async def lifespan(app: FastAPI):
         await worker_lease.close()
 
 
-app = FastAPI(title="Kiwi-Mem", version="1.7.0", lifespan=lifespan)
+app = FastAPI(title="Kiwi-Mem", version=VERSION, lifespan=lifespan)
 app.add_middleware(WorkerBoundary)
 
 
@@ -1592,6 +1591,11 @@ async def root_status():
         "status": "running",
         "gateway": f"Kiwi-Mem v{VERSION}",
         "version": f"Kiwi-Mem v{VERSION}",
+        "fork_version": VERSION,
+        "upstream_version": UPSTREAM_VERSION,
+        "upstream_tag": UPSTREAM_TAG,
+        "upstream_commit": UPSTREAM_COMMIT,
+        "upstream_repository": UPSTREAM_REPOSITORY,
         "memory_enabled": mem_enabled,
         "memory_count": memory_count,
         # 前端 admin-panel 读 status.memories, 加别名避免显示 '-'

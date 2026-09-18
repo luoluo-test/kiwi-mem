@@ -21,6 +21,7 @@ import asyncpg
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from kiwi_version import VERSION
 
 
 class CharacterError(Exception):
@@ -397,7 +398,7 @@ def create_app(registry=None, manager=None, *, shutdown=None):
             await manager.close()
             await registry.close()
 
-    app = FastAPI(title="Kiwi-Mem character gateway", lifespan=lifespan)
+    app = FastAPI(title="Kiwi-Mem character gateway", version=VERSION, lifespan=lifespan)
     from fastapi.middleware.cors import CORSMiddleware
     app.add_middleware(CORSMiddleware,
                        allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
