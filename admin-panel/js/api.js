@@ -7,8 +7,33 @@
 // ============================================================
 
 // Role selection is fixed by this tab's URL, never shared localStorage/cookies.
-const rolePrefix = window.location.pathname.match(/^\/characters\/([A-Za-z0-9_-]{1,128})(?:\/|$)/);
-export const API = window.location.origin + (rolePrefix ? `/characters/${rolePrefix[1]}` : '');
+function panelContext(location) {
+  let pathname;
+  try {
+    // Browsers retain escapes in pathname; the server decodes them before routing.
+    pathname = decodeURIComponent(location.pathname);
+  } catch {
+    throw new Error('invalid_character_panel_path');
+  }
+  // Encoded separators and a second decoding pass must never change the identity.
+  if (/%2f|%5c/i.test(location.pathname) || pathname.includes('\\')) {
+    throw new Error('invalid_character_panel_path');
+  }
+  const segments = pathname.split('/');
+  if (segments[1] === 'characters') {
+    const character = segments[2] || '';
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(character) || segments[3] !== 'admin') {
+      throw new Error('invalid_character_panel_path');
+    }
+    return { api: location.origin + `/characters/${character}`, characterId: character };
+  }
+  // Only the explicit legacy panel has permission to use the default API root.
+  if (segments[1] !== 'admin') throw new Error('invalid_character_panel_path');
+  return { api: location.origin, characterId: null };
+}
+const panel = panelContext(window.location);
+export const API = panel.api;
+export const CHARACTER_ID = panel.characterId;
 
 export async function request(path, { method = 'GET', body, headers, signal } = {}) {
   const opts = { method, headers: { ...(headers || {}) }, signal };

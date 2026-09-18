@@ -130,8 +130,18 @@ async def run():
                 check(r.json().get("status") == "added", "legacy data remains usable")
                 await req("PUT", "/admin/config/user_profile", "default", json={"value": "LEGACY_ONLY"})
                 legacy_before = await registry.conn.fetchrow("SELECT * FROM memories WHERE id=$1", r.json()["id"])
+                # Repeat migration across a real supervisor shutdown. Releasing
+                # its registry lease while workers run is now a fatal condition.
+                pulse.cancel()
+                await asyncio.gather(pulse, return_exceptions=True)
+                await client.aclose()
+                await manager.close()
                 await registry.close()
                 await registry.open()
+                manager = WorkerManager(registry)
+                app = create_app(registry, manager)
+                pulse = asyncio.create_task(manager.heartbeat())
+                client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=120)
                 check(len(await registry.list()) == 1, "registry migration repeatable")
                 check(await registry.conn.fetchrow("SELECT * FROM memories WHERE id=$1", r.json()["id"]) == legacy_before,
                       "registry migration leaves legacy memory columns unchanged")
@@ -285,7 +295,8 @@ async def run():
             await registry.close()
             restarted_registry = Registry(dsn)
             restarted_manager = WorkerManager(restarted_registry)
-            restarted_app = create_app(restarted_registry, restarted_manager)
+            supervisor_stopped = asyncio.Event()
+            restarted_app = create_app(restarted_registry, restarted_manager, shutdown=supervisor_stopped.set)
             async with restarted_app.router.lifespan_context(restarted_app):
                 check(set(restarted_manager.workers) == {"default", "B"},
                       "supervisor restart eagerly restores only active roles")
@@ -295,6 +306,22 @@ async def run():
                           "B persisted memories survive supervisor restart")
                     check((await c.get("/characters/A/debug/memories")).status_code == 410,
                           "role deletion tombstone survives restart")
+                workers = list(restarted_manager.workers.values())
+                # Terminate only this test's registry connection. The lost
+                # PostgreSQL session also loses its supervisor advisory lock.
+                await control.fetchval("SELECT pg_terminate_backend($1)", restarted_registry.conn.get_server_pid())
+                await asyncio.wait_for(supervisor_stopped.wait(), timeout=25)
+                check(not restarted_manager.workers and all(w["process"].returncode is not None for w in workers),
+                      "real registry disconnect stops all old workers before shutdown")
+                check(restarted_manager.client.is_closed and restarted_manager.health_client.is_closed,
+                      "registry disconnect closes business and health clients")
+            replacement_registry = Registry(dsn)
+            try:
+                await replacement_registry.open()
+                check(len(await replacement_registry.list()) == 3,
+                      "fresh supervisor reacquires lease with preserved registry after disconnect")
+            finally:
+                await replacement_registry.close()
     finally:
         if registry.conn and not registry.conn.is_closed():
             created = [r["database_name"] for r in await registry.list() if r["id"] != "default"]

@@ -22,10 +22,14 @@ if kind=='docker':
     if args[:2]==['compose','config']:
         if c.get('compose_fail'): sys.exit(1)
         if '--format' not in args:
-            print('services:\n  kiwi-mem:\n    environment:\n      KIWI_CHARACTER_ISOLATION: '+str(c.get('character_mode',False)).lower()); sys.exit(0)
+            print('services:\n  db:\n    environment:\n      POSTGRES_USER: kiwi\n      POSTGRES_PASSWORD: fixture_secret\n      POSTGRES_DB: '+c.get('configured_db','kiwi_mem')+'\n  kiwi-mem:\n    environment:\n      DATABASE_URL: '+c.get('database_url','postgresql://kiwi:fixture_secret@db:5432/kiwi_mem')+'\n      KIWI_CHARACTER_ISOLATION: '+str(c.get('character_mode',False)).lower()); sys.exit(0)
         print(json.dumps({'services':{'kiwi-mem':{'environment':{'MCP_ALLOWED_HOSTS':c.get('hosts','')}}}})); sys.exit(0)
-    if args[:2]==['compose','ps']: print('fixture-db'); sys.exit(0)
-    if args[0]=='inspect': print('true'); sys.exit(0)
+    if args[:2]==['compose','ps']: print('fixture-gateway' if args[-1]=='kiwi-mem' else 'fixture-db'); sys.exit(0)
+    if args[0]=='inspect':
+        if '.Config.Env' not in ' '.join(args): print('true')
+        elif args[-1]=='fixture-db': print('POSTGRES_USER=kiwi\nPOSTGRES_PASSWORD=fixture_secret\nPOSTGRES_DB='+c.get('runtime_db','kiwi_mem'))
+        else: print('KIWI_CHARACTER_ISOLATION='+str(c.get('runtime_character_mode',False)).lower()+'\nDATABASE_URL='+c.get('runtime_database_url','postgresql://kiwi:fixture_secret@db:5432/kiwi_mem'))
+        sys.exit(0)
     if args[:2]==['compose','exec']:
         sql=' '.join(args)
         print(('t' if c.get('character_databases') else 'f') if 'to_regclass' in sql else str(c.get('character_databases',0)) if 'FROM kiwi_characters' in sql else '-- fixture dump'); sys.exit(0)

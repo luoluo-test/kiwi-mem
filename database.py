@@ -1489,6 +1489,11 @@ async def get_recent_conversation(limit: int = 20):
     **且必须来自这一条 SELECT 的同一快照**：若先读正文再补查版本，一次删除恰好夹在两次
     查询之间时会造出「旧正文 + 新版本」——这是唯一能骗过保存前比对的组合。
     """
+    # Character extraction is global-only. Filter before LIMIT so recent project
+    # traffic cannot leak into, or crowd out, global extraction material. Keep
+    # unknown legacy rows stored without guessing their ownership.
+    global_scope = CONVERSATIONS_GLOBAL_SCOPE.replace("scope_known", "c.scope_known").replace("project_id", "c.project_id")
+    scope_filter = f"WHERE {global_scope} " if os.getenv("KIWI_CHARACTER_ID") else ""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -1497,6 +1502,7 @@ async def get_recent_conversation(limit: int = 20):
             "       (SELECT reset_generation FROM deletion_epoch WHERE id = 1) AS reset_generation "
             "FROM conversations c "
             "LEFT JOIN session_source_rev r ON r.session_id = c.session_id "
+            f"{scope_filter}"
             "ORDER BY c.created_at DESC, c.id DESC LIMIT $1",
             limit,
         )

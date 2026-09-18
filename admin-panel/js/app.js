@@ -12,7 +12,7 @@
 // ============================================================
 import { NAV, ROUTE_INDEX, LEDES } from './routes.js';
 import { errorBlock, loadingBlock } from './ui.js';
-import { get } from './api.js';
+import { get, CHARACTER_ID } from './api.js';
 import { initSearch, tryHighlight } from './search.js';
 import { maybeShowWizard } from './wizard.js';
 import {
@@ -22,7 +22,7 @@ import {
 } from './nav-visibility.mjs';
 
 const DEFAULT_ROUTE = 'dashboard';
-const activeCharacter = window.location.pathname.match(/^\/characters\/([A-Za-z0-9_-]{1,128})\//)?.[1];
+const activeCharacter = CHARACTER_ID;
 if (activeCharacter) {
   document.title = `Kiwi-Mem · ${activeCharacter}`;
   const subtitle = document.querySelector('.sidebar-head .sub');

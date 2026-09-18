@@ -2805,7 +2805,7 @@ async def chat_completions(request: Request):
                         )
                     )
                 
-                if dream_triggered and not auxiliary_request:
+                if dream_triggered and not auxiliary_request and _chat_dream_allowed(scope=scope):
                     print(f"🌙 检测到 Dream 标记，后台启动 Dream（非流式响应无 SSE 事件）...")
                     _launch_dream_from_marker()
                 return JSONResponse(status_code=200, content=resp_data,
@@ -3139,7 +3139,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
                 print(f"✅ 工具调用后最终回复：直接输出 {len(final_text)} 字符")
 
             assistant_msg = final_text
-            dream_triggered = detect_dream_trigger(assistant_msg)
+            dream_triggered = _chat_dream_allowed(scope=(ledger_ctx or {}).get("scope"), project_id=project_id) and detect_dream_trigger(assistant_msg)
 
             # ---- 收尾补救（数据必活，与 stream_and_capture 同一套）----
             # 模拟流式（yield + sleep）与思考链 yield 都是取消点；spawn 若写在流式之后，断连时永不执行
@@ -3457,6 +3457,15 @@ def _launch_dream_detached(trigger_type: str = "manual"):
     _spawn_background_task(_bg_dream())
 
 
+def _chat_dream_allowed(*, scope=None, project_id=None):
+    """Markers obey the same immutable project scope as the Dream tool."""
+    from character_tools import project_tool_allowed
+    if scope is None:
+        # Compatibility for internal stream callers without a ledger snapshot.
+        scope = {"context_mode": "live_project" if project_id is not None else "global"}
+    return project_tool_allowed("trigger_dream", scope)
+
+
 def _launch_dream_from_marker():
     """从聊天回复里的 Dream 标记启动一次后台 Dream（非流式路径用）。"""
     _launch_dream_detached("manual")
@@ -3599,6 +3608,7 @@ def _session_headers(session_id: str, generated: bool) -> dict:
 
 async def stream_and_capture(headers: dict, body: dict, session_id: str, user_message: str, model: str, tool_events: list = None, api_url: str = None, project_id: str = None, prompt_meta: dict = None, api_format: str = "openai", api_key: str = None, is_regenerate: bool = False, mem_enabled: bool = True, record_events: bool = None, extract_enabled: bool = None, ledger_ctx: dict = None, allow_dream: bool = True):
     """流式响应 + 捕获完整回复 + 工具事件"""
+    allow_dream = allow_dream and _chat_dream_allowed(scope=(ledger_ctx or {}).get("scope"), project_id=project_id)
     _api_url = api_url or API_BASE_URL
     _usage_total = None  # W2-03：按事件累加归一化 usage，流结束时落账本
 

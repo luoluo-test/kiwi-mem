@@ -9,6 +9,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import socket
 import sys
 import uuid
@@ -92,6 +93,18 @@ class Registry:
         self.dsn = dsn
         self.conn = None
         self.lock = asyncio.Lock()
+        self.connection_lost = asyncio.Event()
+
+    def require_lease(self):
+        if self.conn is None or self.conn.is_closed() or self.connection_lost.is_set():
+            raise CharacterError("character_supervisor_unavailable", 503)
+
+    def _connection_terminated(self, conn):
+        if conn is self.conn:
+            self.connection_lost.set()
+
+    async def wait_for_disconnect(self):
+        await self.connection_lost.wait()
 
     async def open(self):
         database_url_for(self.dsn, "validation")
@@ -100,6 +113,8 @@ class Registry:
         if not await self.conn.fetchval("SELECT pg_try_advisory_lock(192837465, 1701)"):
             await self.conn.close()
             raise RuntimeError("character supervisor already running")
+        self.connection_lost.clear()
+        self.conn.add_termination_listener(self._connection_terminated)
         await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS kiwi_characters (
                 id TEXT PRIMARY KEY,
@@ -183,12 +198,25 @@ class WorkerManager:
         self.workers = {}
         self.locks = {}
         self.recoveries = {}
+        self._closing = False
+        self._closed = False
+        self._close_lock = asyncio.Lock()
         self.client = httpx.AsyncClient(timeout=httpx.Timeout(300, connect=5), trust_env=False,
                                         follow_redirects=False)
+        # Chat/SSE/MCP streams may occupy every business connection indefinitely.
+        # Leases and startup probes must never queue behind those connections.
+        self.health_client = httpx.AsyncClient(timeout=5, trust_env=False, follow_redirects=False)
+
+    def _require_running(self):
+        if self._closing:
+            raise CharacterError("character_supervisor_unavailable", 503)
+        self.registry.require_lease()
 
     async def get(self, cid):
+        self._require_running()
         await self.registry.get(cid)  # Unknown IDs must not grow the process lock cache.
         async with self.locks.setdefault(cid, asyncio.Lock()):
+            self._require_running()
             row = await self.registry.get(cid)  # Recheck after waiting, including deletion.
             old = self.workers.get(cid)
             if old and old["process"].returncode is None:
@@ -208,12 +236,14 @@ class WorkerManager:
             self.workers[cid] = worker
             try:
                 for _ in range(240):
+                    self._require_running()
                     if process.returncode is not None:
                         break
                     try:
-                        response = await self.client.get(worker["url"] + "/_character/ready",
+                        response = await self.health_client.get(worker["url"] + "/_character/ready",
                                                          headers={"X-Kiwi-Worker-Token": token})
                         if response.status_code == 200 and response.json().get("character_id") == cid:
+                            self._require_running()
                             return worker
                     except (httpx.HTTPError, ValueError):
                         pass
@@ -224,14 +254,28 @@ class WorkerManager:
                 raise
 
     async def _stop(self, cid):
-        worker = self.workers.pop(cid, None)
-        if worker and worker["process"].returncode is None:
-            worker["process"].terminate()
-            try:
-                await asyncio.wait_for(worker["process"].wait(), timeout=15)
-            except asyncio.TimeoutError:
-                worker["process"].kill()
-                await worker["process"].wait()
+        worker = self.workers.get(cid)
+        if worker is None:
+            return
+        process = worker["process"]
+        try:
+            if process.returncode is None:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=15)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+        except asyncio.CancelledError:
+            # Fatal cleanup can overlap Uvicorn's lifespan shutdown. Keep the
+            # worker tracked, and finish killing it before propagating cancellation.
+            if process.returncode is None:
+                process.kill()
+                await asyncio.shield(process.wait())
+            raise
+        finally:
+            if process.returncode is not None and self.workers.get(cid) is worker:
+                self.workers.pop(cid)
 
     async def disable(self, cid):
         async with self.locks.setdefault(cid, asyncio.Lock()):
@@ -239,17 +283,31 @@ class WorkerManager:
             await self._stop(cid)
 
     async def close(self):
-        pending = list(self.recoveries.values())
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-        await asyncio.gather(*(self._stop(cid) for cid in list(self.workers)))
-        await self.client.aclose()
+        async with self._close_lock:
+            if self._closed:
+                return
+            self._closing = True
+            pending = list(self.recoveries.values())
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
+            async def stop_locked(cid):
+                # A request may still be starting this worker. It sees _closing
+                # at its next bounded health probe, then releases this lock.
+                async with self.locks.setdefault(cid, asyncio.Lock()):
+                    await self._stop(cid)
+
+            await asyncio.gather(*(stop_locked(cid) for cid in set(self.workers) | set(self.locks)))
+            await self.health_client.aclose()
+            await self.client.aclose()
+            self._closed = True
 
     async def heartbeat(self):
         async def ping(worker):
             try:
-                await self.client.get(worker["url"] + "/_character/ready",
+                self._require_running()
+                await self.health_client.get(worker["url"] + "/_character/ready",
                                       headers={"X-Kiwi-Worker-Token": worker["token"]}, timeout=5)
             except httpx.HTTPError:
                 pass
@@ -260,8 +318,17 @@ class WorkerManager:
                 pass  # Remain unavailable; retry next heartbeat, never change roles.
 
         while True:
+            self._require_running()
             await asyncio.gather(*(ping(w) for w in list(self.workers.values())))
-            for row in await self.registry.list():
+            try:
+                rows = await asyncio.wait_for(self.registry.list(), timeout=5)
+            except (asyncpg.PostgresError, asyncpg.InterfaceError, OSError, asyncio.TimeoutError):
+                # A cancelled/slow query does not release the session lock. A
+                # disconnected session does: never reconnect or renew that lease.
+                self.registry.require_lease()
+                print("event=character_registry_retry increment=1")
+                rows = []
+            for row in rows:
                 cid = row["id"]
                 worker = self.workers.get(cid)
                 task = self.recoveries.get(cid)
@@ -276,27 +343,57 @@ def public_character(row):
     return {k: row[k] for k in ("id", "name", "state")}
 
 
-def create_app(registry=None, manager=None):
+def _terminate_supervisor():
+    # Uvicorn handles this in both python entry points, then exits. raise_signal
+    # also works on Windows without os.kill's immediate process termination.
+    signal.raise_signal(signal.SIGTERM)
+
+
+def create_app(registry=None, manager=None, *, shutdown=None):
     registry = registry or Registry(os.getenv("DATABASE_URL", ""))
     manager = manager or WorkerManager(registry)
+    shutdown = shutdown or _terminate_supervisor
 
     @asynccontextmanager
     async def lifespan(app):
-        pulse = None
+        pulse = disconnected = supervisor = None
+
+        async def supervise():
+            await asyncio.wait((pulse, disconnected), return_when=asyncio.FIRST_COMPLETED)
+            app.state.character_failed = True
+            # Consume exceptions without printing connection details. Losing the
+            # registry connection releases the supervisor lock, so stop all old
+            # workers before asking the process manager to restart this service.
+            for task in (pulse, disconnected):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(pulse, disconnected, return_exceptions=True)
+            try:
+                await manager.close()
+            finally:
+                try:
+                    await registry.close()
+                finally:
+                    print("event=character_supervisor_stopped increment=1", flush=True)
+                    shutdown()
+
         try:
             if os.getenv("MEMORY_ENABLED", "true").lower() == "false":
                 raise RuntimeError("character isolation requires MEMORY_ENABLED=true at startup")
             await registry.open()
             pulse = asyncio.create_task(manager.heartbeat())
+            disconnected = asyncio.create_task(registry.wait_for_disconnect())
+            supervisor = asyncio.create_task(supervise())
             # Eager workers keep each role's calendar and Dream schedulers running.
             for row in await registry.list():
                 if row["state"] == "active":
                     await manager.get(row["id"])
             yield
         finally:
-            if pulse:
-                pulse.cancel()
-                await asyncio.gather(pulse, return_exceptions=True)
+            tasks = [task for task in (supervisor, pulse, disconnected) if task is not None]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             await manager.close()
             await registry.close()
 

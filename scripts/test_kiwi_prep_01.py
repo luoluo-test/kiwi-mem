@@ -403,6 +403,20 @@ class UpdateGuards(unittest.TestCase):
             self.assertFalse((f.repo/'backups').exists())
             self.assertFalse(any(c[1][:2] == ['compose','up'] for c in f.calls()))
 
+    def test_custom_database_blocks_before_backup_or_merge(self):
+        custom_url = 'postgresql://kiwi:fixture_secret@db:5432/other_registry'
+        for control in ({'database_url':custom_url}, {'runtime_database_url':custom_url},
+                        {'runtime_db':'other_registry'}):
+            f = self.fixture(foreign=False, **control)
+            f.target(False)
+            r = f.run('--yes', '--force', '--no-backup')
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertEqual(f.head(), f.prev)
+            self.assertFalse((f.repo/'backups').exists())
+            self.assertFalse(any(c[1][:2] == ['compose','up'] for c in f.calls()))
+            self.assertNotIn('fixture_secret', r.stdout)
+            self.assertNotIn(custom_url, r.stdout)
+
     def test_T_PREP_01_06_three_conditions(self):
         f = self.fixture(); f.target()
         r = f.run('--auto')
