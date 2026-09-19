@@ -1,5 +1,9 @@
 # Kiwi-Mem Luoluo 二改版本维护
 
+## 2026-09-19 本地 float 适配增量
+
+在 `51ed818a03ae9e85e4c9891bc3c5f1f1c852e425` 上接续中断任务，独立分支 `codex/float-memory-api` 新增 `float-memory-v1` 事件/召回合同及角色库收据表。配套 float 分支为 `codex/kiwi-memory-adapter`；真实 HTTP/PostgreSQL 联调通过，供应商为替身。详细字段、迁移/回退、覆盖与限制见 [float 适配说明](float-memory-adapter.md)。本轮未创建新版本标签、推送、发布、部署或修改生产数据，以下旧快照记录保留。
+
 ## 当前版本与上游对应关系
 
 本仓库名称为 **Kiwi-Mem Luoluo 多角色隔离版**，服务仍使用 `Kiwi-Mem` 名称。

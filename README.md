@@ -1,5 +1,7 @@
 # 🥝 kiwi-mem
 
+本地开发分支新增 float 独立记忆 API（`float-memory-v1`），含角色事件幂等写入与群聊范围召回；见 [接口与验证说明](docs/float-memory-adapter.md)。尚未发布，不包含在旧 `v1.7.0-luoluo.1` 标签中。
+
 **大多数 AI 记忆系统是数据库。kiwi-mem 是一颗大脑。**
 
 [English Version →](README_EN.md)

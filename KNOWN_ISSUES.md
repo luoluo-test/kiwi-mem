@@ -1,5 +1,7 @@
 # 已知问题登记（Known Issues）
 
+2026-09-19 本地 `codex/float-memory-api` 已补充跨应用事件协议，见 [适配说明](docs/float-memory-adapter.md)；下面角色隔离快照的“待办”描述针对旧标签。新增 API 尚未做生产/真实模型验收。
+
 ## 角色隔离二改开发快照（v1.7.0-luoluo.1）
 
 版本与上游对应关系见 [二改版本维护说明](docs/fork-maintenance.md)；尚未通过正式发布验收。
