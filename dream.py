@@ -538,6 +538,16 @@ async def _execute_dream_action(action: dict, dream_id: int, stats: dict) -> dic
     result = {"type": action_type, "success": True}
 
     try:
+        from float_memory_api import protected_group_memory_ids
+        references = list(action.get("memory_ids", []) or []) + list(action.get("related_memory_ids", []) or [])
+        references.append(action.get("memory_id"))
+        for side in ("from", "to"):
+            if action.get(f"{side}_type", "memory") == "memory":
+                references.append(action.get(f"{side}_id"))
+        ids_to_check = [value for item in references if (value := _safe_int(item)) is not None]
+        if await protected_group_memory_ids(ids_to_check):
+            result["skipped"] = "shared event originals require visibility provenance before transformation"
+            return result
         if action_type == "delete":
             ids = action.get("memory_ids", [])
             # 确保 ID 是整数（LLM 可能返回字符串）
@@ -804,6 +814,11 @@ async def auto_dream_check():
         last_msg = await conn.fetchval("""
             SELECT MAX(time) FROM chat_messages WHERE role = 'user'
         """)
+
+    from float_memory_api import latest_float_activity
+    float_activity = await latest_float_activity()
+    if float_activity and (not last_msg or float_activity > last_msg):
+        last_msg = float_activity
 
     if not last_msg:
         return False

@@ -2966,6 +2966,9 @@ async def soften_memory(memory_id: int, softened_content: str, target_resolution
     """
     软化一条记忆 —— 用 LLM 压缩后的内容替换原文，降低精度但延长寿命。
     """
+    from float_memory_api import protected_group_memory_ids
+    if await protected_group_memory_ids([memory_id]):
+        return False
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -5939,7 +5942,9 @@ async def get_unprocessed_memories():
               AND project_id IS NULL
             ORDER BY created_at ASC
         """)
-    return [dict(r) for r in rows]
+    from float_memory_api import protected_group_memory_ids
+    protected = await protected_group_memory_ids([r["id"] for r in rows])
+    return [dict(r) for r in rows if r["id"] not in protected]
 
 
 async def get_aging_memories(min_age_days: int = 5, limit: int = 20, cooldown_days: int = 21):
@@ -5957,9 +5962,12 @@ async def get_aging_memories(min_age_days: int = 5, limit: int = 20, cooldown_da
     
     按创建时间从老到新排序（最老的优先考虑软化）
     """
+    # Exclude before LIMIT: old shared events must not starve ordinary candidates.
+    group_filter = """AND NOT EXISTS (SELECT 1 FROM float_memory_events e
+        WHERE e.memory_id=memories.id AND e.visibility='group')""" if os.getenv("KIWI_CHARACTER_ID") else ""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch("""
+        rows = await conn.fetch(f"""
             SELECT id, title, content, importance, created_at,
                    COALESCE(resolution, 1.0) as resolution,
                    COALESCE(access_count, 0) as access_count,
@@ -5972,6 +5980,7 @@ async def get_aging_memories(min_age_days: int = 5, limit: int = 20, cooldown_da
               AND COALESCE(resolution, 1.0) > 0.3
               AND importance < 8
               AND project_id IS NULL
+              {group_filter}
               AND created_at < NOW() - $1 * INTERVAL '1 day'
               AND (
                     softened_at IS NULL
@@ -5980,7 +5989,9 @@ async def get_aging_memories(min_age_days: int = 5, limit: int = 20, cooldown_da
             ORDER BY created_at ASC
             LIMIT $2
         """, min_age_days, limit, cooldown_days)
-    return [dict(r) for r in rows]
+    from float_memory_api import protected_group_memory_ids
+    protected = await protected_group_memory_ids([r["id"] for r in rows])
+    return [dict(r) for r in rows if r["id"] not in protected]
 
 
 async def get_permanent_memories(project_id: str = None):

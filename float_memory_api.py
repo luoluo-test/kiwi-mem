@@ -46,6 +46,33 @@ async def require_character():
         raise HTTPException(409, "memory_disabled")
 
 
+async def protected_group_memory_ids(memory_ids):
+    """Keep shared originals until derived memories have a visibility provenance model.
+
+    Legacy mode has no adapter table. Explicit user edit/delete remains supported;
+    autonomous Dream and softening must not consume or rewrite these rows.
+    """
+    if not os.getenv("KIWI_CHARACTER_ID") or not memory_ids:
+        return set()
+    from database import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""SELECT memory_id FROM float_memory_events
+            WHERE visibility='group' AND memory_id=ANY($1::int[])""", list(memory_ids))
+    return {row["memory_id"] for row in rows}
+
+
+async def latest_float_activity():
+    if not os.getenv("KIWI_CHARACTER_ID"):
+        return None
+    from database import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Server receipt time: malformed/backdated client timestamps cannot skew
+        # activity. Duplicate retries do not update this value.
+        return await conn.fetchval("SELECT MAX(created_at) FROM float_memory_events")
+
+
 @router.get("/capabilities")
 async def capabilities():
     await require_character()
