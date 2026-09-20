@@ -2,6 +2,8 @@
 
 本地开发分支新增 float 独立记忆 API（`float-memory-v1`），含角色事件幂等写入与群聊范围召回；见 [接口与验证说明](docs/float-memory-adapter.md)。尚未发布，不包含在旧 `v1.7.0-luoluo.1` 标签中。
 
+2026-09-21 本地修复已保护群事件原文免于 Dream 转换，并让 float-only 角色按事件活动时间参与自动 Dream 检查；群派生记忆来源追踪尚未实现，真实模型/生产验收未完成。固定源码与测试边界见上述说明。
+
 **大多数 AI 记忆系统是数据库。kiwi-mem 是一颗大脑。**
 
 [English Version →](README_EN.md)

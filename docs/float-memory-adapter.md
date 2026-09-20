@@ -1,5 +1,24 @@
 # float 独立记忆 API（本地开发）
 
+2026-09-21 修复记录：源码提交 `91737952c47ac140dddd2802f632702f3687378f`，配套 float `2e547d18254b88ed4ec89a0a48deecd802a2041e`。本次保护原始群事件免于 Dream 转换，并将角色事件收据纳入自动 Dream 活动判断。受审基线为本库 `2e07fa7503652d92bdd815b7fab42fa58652d71c`；下面 2026-09-19 段落保留初次接入记录。本次同样只有本地提交，无推送、发布、部署或生产数据操作。
+
+## 2026-09-20 至 21 修复与验证
+
+- 群事件暂不参与 Dream 候选、合并、删除、软化或有群记忆引用的相关转换。执行器与直接软化函数再次校验收据；软化候选在 LIMIT 前排除群事件，避免挤占普通私有记忆的候选数量。用户显式编辑/删除仍有效。
+- 这属于保护原文方案，尚未建立群派生记忆来源/可见性追踪；不会把私人派生记忆放进群召回，也不自动恢复旧版本已消化/删除的群条目。
+- 自动 Dream 使用用户聊天和 float 收据 created_at 中较新的活动时间；时间来自服务端，重复写入不刷新它。保留原 24 小时、午夜时段、开关、碎片数量与锁条件。没有伪造 chat_messages。
+- 没有新增 schema 或启动时改写存量记忆；使用既有 float_memory_events 表。legacy 模式不查询该表。
+
+`scripts/test_float_dream.py` 在独立本机随机 PostgreSQL 库中先得到 F3/F7 的精确失败，再验证修复通过：6 条群事件在 Dream 合并/删除后保留、软化被拒、显式编辑/删除生效、老群事件不挤占私有软化候选；无聊天行但有私有碎片时，旧 float 活动能触发自动检查、近期活动延后。embedding 和 Dream 模型执行器为替身，未调用真实模型。分别移除群保护、活动查询的运行时负向变异都被对应断言捕获；恢复后重新通过。
+
+`scripts/test_float_memory_api.py` 与上述 float 修复源码的真实 HTTP/supervisor/worker/PostgreSQL 联调通过；22 个既有 Python、3 个 JS 回归及 compileall 通过，含 61 角色真库、8 提取范围、178 永久真库守卫。PREP 15 项中 1 项 POSIX PATH 跳过，jq/可选 awk/真实 Compose 条件受阻；Docker、依赖审计、CI 专用变异矩阵未执行。每个测试清理自己的随机库，最终非模板库仅 postgres，测试服务已停止。
+
+以上属于本地中间阶段验证。真实供应商、微信/Supabase、完整多库备份恢复、设备端和生产验收未执行，没有独立评审结论。完整跨仓库记录在 float 的 `docs/kiwi-memory-fixes-2026-09-21.md`。
+
+新增 `test_float_dream.py` 已加入 `.github/workflows/ci.yml` 的角色真库守卫步骤；本次仅本地执行，未推送，也未声称 GitHub CI 通过。
+
+## 初次接入记录（2026-09-19）
+
 2026-09-19，基于 kiwi 本地提交 `51ed818a03ae9e85e4c9891bc3c5f1f1c852e425`，分支 `codex/float-memory-api`；配套 float 基于 `59dfa54a73f746a16c0c8d1ca743e8e0afc490d8`，分支 `codex/kiwi-memory-adapter`。本轮接续中断任务已有工作，未覆盖本地、推送、发布、部署或接触生产数据。远程 GitHub 查询连接失败，未声称与远程同步。完成源码由本地提交固定，用 `git log -1 --format=%H` 读取。
 
 原角色隔离快照不具备通用跨应用事件收据，所以新增 `float_memory_api.py`，由 `main.py` 注册路由、`character_boundary.initialize_character_tables` 初始化附加表；没有重构原聊天网关。

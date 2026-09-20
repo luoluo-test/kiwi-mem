@@ -1,5 +1,9 @@
 # Kiwi-Mem Luoluo 二改版本维护
 
+## 2026-09-21 float 审查修复
+
+修复源码固定为 `91737952c47ac140dddd2802f632702f3687378f`，基于 `2e07fa7503652d92bdd815b7fab42fa58652d71c`，继续使用 `codex/float-memory-api`。配套 float 源码为 `2e547d18254b88ed4ec89a0a48deecd802a2041e`。群事件采用 Dream 原文保护，自动活动判断接入 float 收据；真实 PostgreSQL、HTTP 联调和既有本地回归通过，详细边界见 [适配说明](float-memory-adapter.md)。新增 `test_float_dream.py` 已登记到 CI，尚未推送或运行 GitHub CI。没有改版本号/标签、发布、部署或操作生产数据。
+
 ## 2026-09-19 本地 float 适配增量
 
 在 `51ed818a03ae9e85e4c9891bc3c5f1f1c852e425` 上接续中断任务，独立分支 `codex/float-memory-api` 新增 `float-memory-v1` 事件/召回合同及角色库收据表。配套 float 分支为 `codex/kiwi-memory-adapter`；真实 HTTP/PostgreSQL 联调通过，供应商为替身。详细字段、迁移/回退、覆盖与限制见 [float 适配说明](float-memory-adapter.md)。本轮未创建新版本标签、推送、发布、部署或修改生产数据，以下旧快照记录保留。
