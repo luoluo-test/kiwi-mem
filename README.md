@@ -1,12 +1,16 @@
 # 🥝 kiwi-mem
 
+`v1.7.0-luoluo.2` 新增 float 独立记忆 API（`float-memory-v1`），含角色事件幂等写入与群聊范围召回，配套 float `v0.2.0`；见 [版本、排错与回退记录](docs/versions/v1.7.0-luoluo.2.md) 和 [接口与验证说明](docs/float-memory-adapter.md)。旧 `v1.7.0-luoluo.1` 标签保留，不含该 API。
+
+2026-09-21 本地修复已保护群事件原文免于 Dream 转换，并让 float-only 角色按事件活动时间参与自动 Dream 检查；群派生记忆来源追踪尚未实现，真实模型/生产验收未完成。固定源码与测试边界见上述说明。
+
 **大多数 AI 记忆系统是数据库。kiwi-mem 是一颗大脑。**
 
 [English Version →](README_EN.md)
 
-### Luoluo 多角色隔离版 · v1.7.0-luoluo.1
+### Luoluo 多角色隔离版 · v1.7.0-luoluo.2
 
-本二改版本为 **`v1.7.0-luoluo.1`**，基于 [LucieEveille/kiwi-mem v1.7.0](https://github.com/LucieEveille/kiwi-mem/tree/v1.7.0)，
+本二改版本为 **`v1.7.0-luoluo.2`**，基于 [LucieEveille/kiwi-mem v1.7.0](https://github.com/LucieEveille/kiwi-mem/tree/v1.7.0)，
 上游准确提交为 [`b01a0c5`](https://github.com/LucieEveille/kiwi-mem/commit/b01a0c506f4f10f90f30d408c0291f16720f0718)。
 这是用于追踪代码的开发快照标签，尚未通过正式发布验收。
 版本对应关系与后续同步规则见 [二改版本维护说明](docs/fork-maintenance.md)。
@@ -21,7 +25,7 @@
 
 此扩展需要 PostgreSQL 建库权限并增加每角色资源占用；角色 ID 不提供用户鉴权。
 默认关闭以保留旧启动行为。启用前请阅读 [迁移、接口和维护合同](docs/character-isolation.md)，
-以及 [本地验证记录](docs/character-isolation-verification.md)。float 尚未接入。
+以及 [本地验证记录](docs/character-isolation-verification.md)。float 接入合同与验证边界见顶部链接。
 最近一轮修复及验证见 [第二轮审查修复记录](docs/character-isolation-review-2-fixes.md)。
 
 ---

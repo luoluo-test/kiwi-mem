@@ -325,6 +325,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Kiwi-Mem", version=VERSION, lifespan=lifespan)
+from float_memory_api import router as float_memory_router
+app.include_router(float_memory_router)
 app.add_middleware(WorkerBoundary)
 
 

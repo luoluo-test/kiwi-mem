@@ -55,6 +55,8 @@ def chat_contract(body):
 
 
 async def initialize_character_tables():
+    from float_memory_api import initialize
+    await initialize()
     from database import get_pool
     pool = await get_pool()
     async with pool.acquire() as conn:
