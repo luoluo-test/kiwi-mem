@@ -1,5 +1,9 @@
 # Kiwi-Mem Luoluo 二改版本维护
 
+## 2026-09-21 主分支快照 v1.7.0-luoluo.2
+
+按用户授权将角色隔离和 float 适配合入 `main`，标记新的源码追踪标签 `v1.7.0-luoluo.2`，保留旧标签。对应原版仍为 `v1.7.0` / `b01a0c506f4f10f90f30d408c0291f16720f0718`。配套 float 为 `v0.2.0`。准确提交的定位命令、差异和回退说明见 [版本记录](versions/v1.7.0-luoluo.2.md)。本次是源码合并和快照编号，不代表完整正式发布验收或生产部署。下方日期段落保留当时的验证与推送状态。
+
 ## 2026-09-21 float 审查修复
 
 修复源码固定为 `91737952c47ac140dddd2802f632702f3687378f`，基于 `2e07fa7503652d92bdd815b7fab42fa58652d71c`，继续使用 `codex/float-memory-api`。配套 float 源码为 `2e547d18254b88ed4ec89a0a48deecd802a2041e`。群事件采用 Dream 原文保护，自动活动判断接入 float 收据；真实 PostgreSQL、HTTP 联调和既有本地回归通过，详细边界见 [适配说明](float-memory-adapter.md)。新增 `test_float_dream.py` 已登记到 CI，尚未推送或运行 GitHub CI。没有改版本号/标签、发布、部署或操作生产数据。
@@ -11,22 +15,22 @@
 ## 当前版本与上游对应关系
 
 本仓库名称为 **Kiwi-Mem Luoluo 多角色隔离版**，服务仍使用 `Kiwi-Mem` 名称。
-当前二改版本为 **`v1.7.0-luoluo.1`**，用于固定已完成两轮审查修复的开发快照。
+当前二改版本为 **`v1.7.0-luoluo.2`**，包含角色隔离、float 适配及 Dream 修复的开发快照。
 
 | 项目 | 对应值 |
 | --- | --- |
 | 二改仓库 | [luoluo-test/kiwi-mem](https://github.com/luoluo-test/kiwi-mem) |
-| 二改版本 / Git 标签 | [`v1.7.0-luoluo.1`](https://github.com/luoluo-test/kiwi-mem/tree/v1.7.0-luoluo.1) |
-| 功能分支 | `codex/character-isolation` |
-| 审查入口 | [Draft PR #1](https://github.com/luoluo-test/kiwi-mem/pull/1) |
+| 二改版本 / Git 标签 | [`v1.7.0-luoluo.2`](https://github.com/luoluo-test/kiwi-mem/tree/v1.7.0-luoluo.2) |
+| 默认分支 | `main` |
+| 审查入口 | [PR #1](https://github.com/luoluo-test/kiwi-mem/pull/1)、[PR #2](https://github.com/luoluo-test/kiwi-mem/pull/2) |
 | 原作者仓库 | [LucieEveille/kiwi-mem](https://github.com/LucieEveille/kiwi-mem) |
 | 对应原版 | [`v1.7.0`](https://github.com/LucieEveille/kiwi-mem/tree/v1.7.0) |
 | 上游准确提交 | [`b01a0c506f4f10f90f30d408c0291f16720f0718`](https://github.com/LucieEveille/kiwi-mem/commit/b01a0c506f4f10f90f30d408c0291f16720f0718) |
 | 基线核实日期 | 2026-09-18 |
 
 上游 `v1.7.0` 是附注标签；这里记录的是解引用后的代码提交，不是标签对象 ID。
-当前 `main` 保留上游基线，二改内容在上述功能分支及二改标签中；查看或下载本快照请选择二改标签。
-本次只建立版本身份和追踪标签，不创建 GitHub Release、不合并 PR、不部署，也不迁移生产数据。
+`main` 用于接收二改内容；固定复现本快照时请选择二改标签，不依赖可能继续变化的分支 HEAD。
+本次合并与标记源码快照，不创建 GitHub Release、不部署，也不迁移生产数据。
 
 ## 编号规则
 
@@ -59,12 +63,13 @@
 
 建立后续版本时，一并更新运行时常量、README / README_EN、CHANGELOG 及下表，
 完成适用检查后提交，再给该提交建立同名附注标签。附注中保留上游标签与准确提交。
-使用 `git rev-parse 'v1.7.0-luoluo.1^{commit}'` 可得到本快照的准确二改提交；不要把会变化的分支 HEAD 当作永久版本记录。
+使用 `git rev-parse 'v1.7.0-luoluo.2^{commit}'` 可得到本快照的准确二改提交；不要把会变化的分支 HEAD 当作永久版本记录。
 
 ## 版本对应记录
 
 | 二改标签 | 上游标签 | 上游提交 | 内容与验证范围 |
 | --- | --- | --- | --- |
+| `v1.7.0-luoluo.2` | `v1.7.0` | `b01a0c506f4f10f90f30d408c0291f16720f0718` | 角色隔离 + float API、幂等收据、群事件 Dream 保护；配套 float v0.2.0；开发快照 |
 | `v1.7.0-luoluo.1` | `v1.7.0` | `b01a0c506f4f10f90f30d408c0291f16720f0718` | 多角色隔离与两轮审查修复，附加统一版本信息；开发快照 |
 
 版本标签固定代码状态；此前的 [本地验证记录](character-isolation-verification.md)、
@@ -81,4 +86,4 @@
 
 多角色模式下不要直接运行会覆盖数据或忽略角色数据库的一键升级流程。
 功能设计、迁移与回退条件、接口合同以及 float 接入缺口继续以
-[多角色隔离维护文档](character-isolation.md) 为准。float 尚未接入，此版本号不表示已完成互通。
+[多角色隔离维护文档](character-isolation.md) 和 [float 适配说明](float-memory-adapter.md) 为准。版本标签不表示生产互通验收通过。
