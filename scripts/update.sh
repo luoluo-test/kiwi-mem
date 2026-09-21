@@ -91,6 +91,7 @@ if [ "$RESUMED" = "1" ]; then
     LISTEN_PORT="${STATE_FIELDS[3]}"
     BACKUP_FILE="${STATE_FIELDS[4]:-}"
     QUIET=0
+    bash scripts/character_update_guard.sh "$COMPOSE" || die "角色备份范围检查未通过，停止续跑。"
 fi
 
 if [ "$RESUMED" = "0" ]; then
@@ -238,6 +239,8 @@ if [ "$ASSUME_YES" = "0" ]; then
         [Nn]*) echo "那就先不更新。"; exit 0 ;;
     esac
 fi
+
+bash scripts/character_update_guard.sh "$COMPOSE" || die "角色备份范围检查未通过，未备份、未更新。"
 
 # ---- 备份数据库 ----
 BACKUP_FILE=""

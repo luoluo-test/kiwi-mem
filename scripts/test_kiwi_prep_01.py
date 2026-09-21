@@ -32,6 +32,7 @@ os.environ["DATABASE_URL"] = "postgresql://unused:unused@127.0.0.1:1/unused"
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from mcp.server.fastmcp import FastMCP
+from kiwi_version import VERSION, UPSTREAM_VERSION
 
 INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
     "protocolVersion": "2025-06-18", "capabilities": {},
@@ -149,7 +150,7 @@ class ApplicationGuards(unittest.TestCase):
                 self.assertIs(type(result[key]), int)
                 self.assertEqual(result[key], 2)
             self.assertEqual(result["protection"], "preview")
-            self.assertEqual(result["version"], "1.7.0")
+            self.assertEqual(result["version"], VERSION)
             self.assertIs(result["ip_literal_allowed"], True)
             self.assertIs(result["foreign_host_seen"], False)
             self.assertIsNone(result["foreign_host_last_seen_at"])
@@ -290,10 +291,15 @@ class UpdateGuards(unittest.TestCase):
                 self.assertEqual(f.head(),f.prev)
                 (f.repo/'.env').write_text('MCP_ALLOWED_HOSTS="[2001:db8::1]:*"\r\n')
                 r=f.run('--auto')
+                self.assertEqual(r.returncode,1,r.stdout)  # MCP fallback passes; backup scope is unverifiable.
+                self.assertEqual(f.head(),f.prev)
+                f.control.update(compose_fail=False, hosts='[2001:db8::1]:*')
+                f.save()
+                r=f.run('--auto')
                 self.assertEqual(r.returncode,0,r.stdout)
                 self.assertEqual(f.head(),target)
                 self.assertEqual((f.root/'executed').read_text().splitlines(),['new-script'])
-                self.assertEqual(sum(c[1][:2]==['compose','exec'] for c in f.calls()),1)
+                self.assertEqual(sum(c[1][:2]==['compose','exec'] and 'pg_dump' in ' '.join(c[1]) for c in f.calls()),1)
                 self.assertFalse((f.repo/'.update-state.json').exists())
                 calls=[c[1] for c in f.calls(http) if any(x.endswith('/memory/mcp') for x in c[1])]
                 self.assertEqual(len(calls),1)
@@ -388,6 +394,30 @@ class UpdateGuards(unittest.TestCase):
                 print('OBSERVATION: real compose export prefix published='+str(actual))
         else: print('BLOCKED: real compose config unavailable locally')
 
+    def test_character_update_blocks_before_backup_or_merge(self):
+        for control in ({'character_mode':True}, {'character_databases':2}):
+            f = self.fixture(foreign=False, **control)
+            f.target(False)
+            r = f.run('--yes', '--force', '--no-backup')
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertEqual(f.head(), f.prev)
+            self.assertFalse((f.repo/'backups').exists())
+            self.assertFalse(any(c[1][:2] == ['compose','up'] for c in f.calls()))
+
+    def test_custom_database_blocks_before_backup_or_merge(self):
+        custom_url = 'postgresql://kiwi:fixture_secret@db:5432/other_registry'
+        for control in ({'database_url':custom_url}, {'runtime_database_url':custom_url},
+                        {'runtime_db':'other_registry'}):
+            f = self.fixture(foreign=False, **control)
+            f.target(False)
+            r = f.run('--yes', '--force', '--no-backup')
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertEqual(f.head(), f.prev)
+            self.assertFalse((f.repo/'backups').exists())
+            self.assertFalse(any(c[1][:2] == ['compose','up'] for c in f.calls()))
+            self.assertNotIn('fixture_secret', r.stdout)
+            self.assertNotIn(custom_url, r.stdout)
+
     def test_T_PREP_01_06_three_conditions(self):
         f = self.fixture(); f.target()
         r = f.run('--auto')
@@ -409,7 +439,10 @@ class UpdateGuards(unittest.TestCase):
             f=self.fixture(**control); target=f.target()
             (f.repo/'.env').write_text(env)
             if shell is not None: f.env['MCP_ALLOWED_HOSTS']=shell
-            r=f.run('--auto'); self.assertEqual(r.returncode,0,r.stdout); self.assertEqual(f.head(),target)
+            r=f.run('--auto')
+            blocked = control.get('compose_fail', False)
+            self.assertEqual(r.returncode, 1 if blocked else 0, r.stdout)
+            self.assertEqual(f.head(), f.prev if blocked else target)
         f=self.fixture(compose_fail=True); f.target()
         sentinel=f.root/'PWNED'
         (f.repo/'.env').write_text('MCP_ALLOWED_HOSTS=$(touch "'+sentinel.as_posix()+'")\n')
@@ -418,7 +451,8 @@ class UpdateGuards(unittest.TestCase):
         self.assertEqual(r.returncode,3,r.stdout)
         # Real user flow: change only pending dotenv, then retry.
         (f.repo/'.env').write_text('MCP_ALLOWED_HOSTS=wrong-but-valid.example\n')
-        r=f.run('--auto'); self.assertEqual(r.returncode,0,r.stdout)
+        r=f.run('--auto'); self.assertEqual(r.returncode,1,r.stdout)
+        self.assertEqual(f.head(), f.prev)
         self.assertNotIn('wrong-but-valid.example',r.stdout)
 
     def test_T_PREP_01_08_preflight_before_mutation(self):
@@ -443,7 +477,7 @@ class UpdateGuards(unittest.TestCase):
             self.assertEqual(len(builds),2 if broken else 1)
             self.assertEqual(builds[0][2],target)
             if broken: self.assertEqual(builds[-1][2],f.prev)
-            self.assertEqual(sum(c[1][:2]==['compose','exec'] for c in calls),1)
+            self.assertEqual(sum(c[1][:2]==['compose','exec'] and 'pg_dump' in ' '.join(c[1]) for c in calls),1)
             self.assertEqual(r.stdout.count('现在更新吗'),1)
             self.assertFalse((f.repo/'.update-state.json').exists())
         f=self.fixture(); f.target(False,True)
@@ -481,8 +515,10 @@ class DeliveryGuards(unittest.TestCase):
                 for token in tokens: self.assertIn(token,text)
         p=ROOT/'scripts/upgrade_gates.json'; self.assertTrue(p.exists())
         self.assertIs(json.loads(p.read_text(encoding='utf-8'))['gates']['mcp_access_control'],False)
-        text=(ROOT/'main.py').read_text(encoding='utf-8')
-        self.assertIn('VERSION = "1.7.0"',text); self.assertIn('version="1.7.0"',text)
+        import main
+        self.assertEqual(UPSTREAM_VERSION, "1.7.0")
+        self.assertEqual(main.VERSION, VERSION)
+        self.assertEqual(main.app.version, VERSION)
         # PREP must coexist with SEC-01a in the release integration tree.
         content=(ROOT/'mcp_server.py').read_text(encoding='utf-8-sig')
         calls=[n for n in ast.walk(ast.parse(content)) if isinstance(n,ast.Call)

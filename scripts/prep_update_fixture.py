@@ -21,10 +21,18 @@ if kind=='docker':
     if args[:2]==['compose','version']: print('Docker Compose version fixture'); sys.exit(0)
     if args[:2]==['compose','config']:
         if c.get('compose_fail'): sys.exit(1)
+        if '--format' not in args:
+            print('services:\n  db:\n    environment:\n      POSTGRES_USER: kiwi\n      POSTGRES_PASSWORD: fixture_secret\n      POSTGRES_DB: '+c.get('configured_db','kiwi_mem')+'\n  kiwi-mem:\n    environment:\n      DATABASE_URL: '+c.get('database_url','postgresql://kiwi:fixture_secret@db:5432/kiwi_mem')+'\n      KIWI_CHARACTER_ISOLATION: '+str(c.get('character_mode',False)).lower()); sys.exit(0)
         print(json.dumps({'services':{'kiwi-mem':{'environment':{'MCP_ALLOWED_HOSTS':c.get('hosts','')}}}})); sys.exit(0)
-    if args[:2]==['compose','ps']: print('fixture-db'); sys.exit(0)
-    if args[0]=='inspect': print('true'); sys.exit(0)
-    if args[:2]==['compose','exec']: print('-- fixture dump'); sys.exit(0)
+    if args[:2]==['compose','ps']: print('fixture-gateway' if args[-1]=='kiwi-mem' else 'fixture-db'); sys.exit(0)
+    if args[0]=='inspect':
+        if '.Config.Env' not in ' '.join(args): print('true')
+        elif args[-1]=='fixture-db': print('POSTGRES_USER=kiwi\nPOSTGRES_PASSWORD=fixture_secret\nPOSTGRES_DB='+c.get('runtime_db','kiwi_mem'))
+        else: print('KIWI_CHARACTER_ISOLATION='+str(c.get('runtime_character_mode',False)).lower()+'\nDATABASE_URL='+c.get('runtime_database_url','postgresql://kiwi:fixture_secret@db:5432/kiwi_mem'))
+        sys.exit(0)
+    if args[:2]==['compose','exec']:
+        sql=' '.join(args)
+        print(('t' if c.get('character_databases') else 'f') if 'to_regclass' in sql else str(c.get('character_databases',0)) if 'FROM kiwi_characters' in sql else '-- fixture dump'); sys.exit(0)
     if args[:2]==['compose','up']: sys.exit(0)
     sys.exit(0)
 if kind=='sleep': sys.exit(0)
@@ -66,7 +74,7 @@ class UpdateFixture:
         self.env.update(PREP_FIXTURE=str(self.root), GIT_CONFIG_NOSYSTEM='1', PYTHONIOENCODING='utf-8',
                         GIT_AUTHOR_NAME='PREP fixture', GIT_AUTHOR_EMAIL='fixture@example.invalid',
                         GIT_COMMITTER_NAME='PREP fixture', GIT_COMMITTER_EMAIL='fixture@example.invalid')
-        self.bash = 'C:/Program Files/Git/bin/bash.exe' if os.name=='nt' else shutil.which('bash')
+        self.bash = shutil.which('bash') or str(Path(shutil.which('git')).resolve().parents[1] / 'bin/bash.exe')
         for kind in ('docker','curl','wget','sleep'):
             path=self.bin/kind
             path.write_text('#!/usr/bin/env bash\nexec "'+sys.executable.replace('\\','/')+'" "'+str(self.root/'fake.py').replace('\\','/')+'" '+kind+' "$@"\n',encoding='utf-8',newline='\n')
@@ -78,7 +86,7 @@ class UpdateFixture:
         self.git(self.root,'init','--bare',str(self.remote))
         self.git(self.root,'init','-b','main',str(self.source))
         (self.source/'scripts').mkdir()
-        for rel in ('scripts/update.sh','scripts/update_support.py','scripts/update_support_jq.sh','scripts/prep_authority.jq','mcp_access.py'):
+        for rel in ('scripts/update.sh','scripts/character_update_guard.sh','scripts/update_support.py','scripts/update_support_jq.sh','scripts/prep_authority.jq','mcp_access.py'):
             if (ROOT/rel).exists():
                 (self.source/rel).write_text((ROOT/rel).read_text(encoding='utf-8'),encoding='utf-8',newline='\n')
         (self.source/'docker-compose.yml').write_text('services: {}\n')

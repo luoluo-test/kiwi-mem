@@ -32,6 +32,8 @@ services:
       DATABASE_URL: postgresql://kiwi:kiwi_secret_change_me@db:5432/kiwi_mem
       # ---- 记忆系统 ----
       MEMORY_ENABLED: ${MEMORY_ENABLED:-true}
+      KIWI_CHARACTER_ISOLATION: ${KIWI_CHARACTER_ISOLATION:-false}
+      KIWI_MAX_CHARACTERS: ${KIWI_MAX_CHARACTERS:-16}
       DEFAULT_MODEL: ${DEFAULT_MODEL:-anthropic/claude-sonnet-4}
       PORT: ${PORT:-8080}
       # ---- 可选 ----

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kiwi-Mem · 角色管理</title>
+<style>
+body{font:16px/1.6 system-ui,sans-serif;max-width:850px;margin:48px auto;padding:0 24px;color:#243429;background:#f8faf7}
+h1{font-size:28px}form,article{padding:20px;background:white;border:1px solid #dce5dc;border-radius:12px;margin:16px 0}
+label{display:block;margin:8px 0}input,button{font:inherit;padding:8px;border:1px solid #a8bba9;border-radius:6px}
+button,a{cursor:pointer}button{background:#e5f1df}small{display:block;color:#526753}article a{margin-left:16px}#status{white-space:pre-wrap}
+</style>
+<h1>🥝 Kiwi-Mem 角色管理</h1>
+<p>每个角色拥有独立记忆、日历、画像和 Dream。打开角色面板后，该页签始终属于这个角色。</p>
+<small>default 仅保存旧数据。角色 ID 是固定归属标识，不是访问密码。</small>
+<form id="create">
+  <h2>创建角色</h2>
+  <label>稳定 ID <input name="id" required pattern="[A-Za-z0-9_-]{1,128}" maxlength="128" placeholder="float characterId"></label>
+  <label>显示名称 <input name="name" required maxlength="200"></label>
+  <button>创建空白角色</button>
+</form>
+<p id="status" role="status"></p>
+<section id="roles" aria-label="角色列表"></section>
+<script type="module">
+const status = document.querySelector('#status');
+const roles = document.querySelector('#roles');
+async function request(path, options) {
+  const r = await fetch(path, options);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.code || '请求失败');
+  return data;
+}
+async function refresh() {
+  const data = await request('/characters');
+  roles.replaceChildren();
+  for (const role of data.characters) {
+    const card = document.createElement('article');
+    const title = document.createElement('strong');
+    title.textContent = `${role.name} · ${role.id} · ${role.state}`;
+    card.append(title);
+    if (role.state === 'active') {
+      const link = document.createElement('a');
+      link.href = `/characters/${encodeURIComponent(role.id)}/admin/`;
+      link.textContent = '打开此角色面板';
+      card.append(link);
+      const rename = document.createElement('button');
+      rename.textContent = '改名';
+      rename.onclick = async () => {
+        const name = prompt('新的显示名称（ID 保持不变）', role.name);
+        if (!name) return;
+        try {
+          await request(`/characters/${encodeURIComponent(role.id)}`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+          await refresh();
+        } catch (e) { status.textContent = e.message; }
+      };
+      card.append(' ', rename);
+    }
+    roles.append(card);
+  }
+}
+document.querySelector('#create').onsubmit = async event => {
+  event.preventDefault();
+  const button = event.target.querySelector('button');
+  button.disabled = true;
+  status.textContent = '正在创建角色数据库并启动工作进程…';
+  try {
+    await request('/characters', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(event.target)))});
+    status.textContent = '创建完成。请在该角色面板中配置人设与供应商。';
+    event.target.reset();
+    await refresh();
+  } catch (e) { status.textContent = e.message; }
+  finally { button.disabled = false; }
+};
+refresh().catch(e => { status.textContent = e.message; });
+</script>
+</html>

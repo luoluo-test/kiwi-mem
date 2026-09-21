@@ -67,6 +67,7 @@ from config import (
     get_all_config, set_config, get_config, get_config_int, get_config_bool, get_config_float,
 )
 from memory_extractor import extract_memories
+from character_boundary import WorkerBoundary, chat_contract, CharacterScopeError
 from mcp_server import get_mcp_app, get_calendar_mcp_app, mcp_memory, mcp_calendar
 from web_search import web_search, format_results_for_prompt, get_engine_list
 from mcp_client import get_tools_for_servers, call_tool, call_tools_batch, clear_tool_cache
@@ -75,14 +76,13 @@ from anthropic_adapter import (
     from_anthropic_response, anthropic_stream_to_openai,
 )
 from mcp_access import observe_mcp_access, mcp_access_status, log_mcp_access_preview
+from kiwi_version import VERSION, UPSTREAM_VERSION, UPSTREAM_TAG, UPSTREAM_COMMIT, UPSTREAM_REPOSITORY
 
 # ============================================================
 # 配置项 —— 全部从环境变量读取，部署时在云平台面板里设置
 # ============================================================
 
-# 版本号。管理面板顶栏/侧栏读 GET / 的 version 字段显示，
-# 只此一处定义，避免两处字符串各说各话。
-VERSION = "1.7.0"
+# 版本与上游基线统一定义于 kiwi_version.py；管理面板读取 GET / 的 version。
 
 # 你的 API Key（OpenRouter / OpenAI / 其他兼容服务）
 API_KEY = os.getenv("API_KEY", "")
@@ -191,6 +191,8 @@ async def _backfill_permanent_embeddings_background():
 
 def load_system_prompt():
     """从 system_prompt.txt 文件读取人设内容（降级方案）"""
+    if os.getenv("KIWI_CHARACTER_ID", "default") != "default":
+        return ""  # New characters must not inherit the legacy persona file.
     prompt_path = os.path.join(os.path.dirname(__file__), "system_prompt.txt")
     try:
         with open(prompt_path, "r", encoding="utf-8") as f:
@@ -234,10 +236,20 @@ async def lifespan(app: FastAPI):
     """应用启动时初始化数据库和MCP，关闭时断开连接"""
     digest_task = None
     dream_check_task = None
+    worker_lease = None
+    if os.getenv("KIWI_CHARACTER_ID"):
+        import asyncpg
+        worker_lease = await asyncpg.connect(os.environ["DATABASE_URL"])
+        if not await worker_lease.fetchval("SELECT pg_try_advisory_lock(192837465, 1702)"):
+            await worker_lease.close()
+            raise RuntimeError("character worker already running")
     
     if MEMORY_ENABLED:
         try:
             await init_tables()
+            if os.getenv("KIWI_CHARACTER_ID"):
+                from character_boundary import initialize_character_tables
+                await initialize_character_tables()
             pool = await get_pool()
             async with pool.acquire() as conn:
                 count = await conn.fetchval("""
@@ -274,6 +286,8 @@ async def lifespan(app: FastAPI):
             
         except Exception as e:
             print(f"⚠️  数据库初始化失败: {e}")
+            if os.getenv("KIWI_CHARACTER_ID"):
+                raise RuntimeError("character database initialization failed") from None
             print("⚠️  记忆系统将不可用，但网关仍可正常转发")
     else:
         print("ℹ️  记忆系统已关闭（设置 MEMORY_ENABLED=true 开启）")
@@ -306,9 +320,19 @@ async def lifespan(app: FastAPI):
         dream_check_task.cancel()
     if MEMORY_ENABLED:
         await close_pool()
+    if worker_lease:
+        await worker_lease.close()
 
 
-app = FastAPI(title="Kiwi-Mem", version="1.7.0", lifespan=lifespan)
+app = FastAPI(title="Kiwi-Mem", version=VERSION, lifespan=lifespan)
+app.add_middleware(WorkerBoundary)
+
+
+@app.get("/_character/ready", include_in_schema=False)
+async def character_ready():
+    if not os.getenv("KIWI_CHARACTER_ID"):
+        return JSONResponse({"code": "not_a_character_worker"}, status_code=404)
+    return {"character_id": os.environ["KIWI_CHARACTER_ID"]}
 
 
 # ============================================================
@@ -1484,7 +1508,10 @@ async def process_memories_background(session_id: str, user_msg: str, assistant_
         related_contents = [r["content"] for r in related]
         
         # 再补充最近的记忆（防止遗漏新存的）
-        recent = await get_recent_memories(limit=30, project_id=project_id)
+        if os.getenv("KIWI_CHARACTER_ID") and project_id is None:
+            recent = await get_recent_memories(limit=30, global_only=True)
+        else:
+            recent = await get_recent_memories(limit=30, project_id=project_id)
         recent_contents = [r["content"] for r in recent]
         
         # 合并去重
@@ -1564,6 +1591,11 @@ async def root_status():
         "status": "running",
         "gateway": f"Kiwi-Mem v{VERSION}",
         "version": f"Kiwi-Mem v{VERSION}",
+        "fork_version": VERSION,
+        "upstream_version": UPSTREAM_VERSION,
+        "upstream_tag": UPSTREAM_TAG,
+        "upstream_commit": UPSTREAM_COMMIT,
+        "upstream_repository": UPSTREAM_REPOSITORY,
         "memory_enabled": mem_enabled,
         "memory_count": memory_count,
         # 前端 admin-panel 读 status.memories, 加别名避免显示 '-'
@@ -1984,6 +2016,13 @@ async def chat_completions(request: Request):
     # API_KEY 检查移到供应商路由的 else 分支：只有「既没匹配到供应商、又没有环境变量
     # API_KEY」时才报 500。否则面板里配了供应商、但 env API_KEY 留空的用户会被误拦。
     body = await request.json()
+    if not isinstance(body, dict):
+        return JSONResponse({"code": "invalid_json"}, status_code=400)
+    auxiliary_request = body.get("memory_mode") == "auxiliary"
+    contract_error = chat_contract(body)
+    if contract_error:
+        code, status = contract_error
+        return JSONResponse({"error": code, "code": code}, status_code=status)
     try:
         reasoning_effort = _normalize_reasoning_effort(body.pop("reasoning_effort", None))
     except ValueError as e:
@@ -2112,6 +2151,16 @@ async def chat_completions(request: Request):
         "context_project_id",
         "event_code",
     ), scope_values))
+    if os.getenv("KIWI_CHARACTER_ID") and (
+            scope["context_mode"] == "quarantined_project"
+            or scope["event_code"] == "scope_mismatch"):
+        return JSONResponse({"error": "invalid_project_ownership",
+                             "code": "invalid_project_ownership"}, status_code=409)
+    if os.getenv("KIWI_CHARACTER_ID") and not auxiliary_request:
+        from character_boundary import bind_session_project
+        if not await bind_session_project(session_id, scope["context_project_id"]):
+            return JSONResponse({"error": "session_project_mismatch",
+                                 "code": "session_project_mismatch"}, status_code=409)
     if scope["event_code"]:
         print(f"event={scope['event_code']} increment=1")
     # From here onward every consumer reads this immutable snapshot. The raw request
@@ -2636,7 +2685,16 @@ async def chat_completions(request: Request):
             tool_map[t["function"]["name"]] = {"type": "gateway_builtin", "handler": "reminder"}
         print("⏰ 提醒工具已注册（常驻）")
 
+    from character_tools import project_tool_allowed
+    openai_tools = [tool for tool in openai_tools if project_tool_allowed(tool["function"]["name"], scope)]
+    tool_map = {name: dict(info, scope=scope) for name, info in tool_map.items()
+                if project_tool_allowed(name, scope)}
     tools_cache_applied = False
+    if auxiliary_request:
+        # Auxiliary generations cannot invoke memory/calendar/reminder write tools.
+        openai_tools, tool_map = [], {}
+        body.pop("tools", None)
+        body.pop("tool_choice", None)
     if cache_on and openai_tools and is_stream:
         tools_cache_applied = _apply_tools_cache_breakpoint(openai_tools, tool_map, cache_ttl=cache_ttl)
         if tools_cache_applied:
@@ -2713,7 +2771,7 @@ async def chat_completions(request: Request):
     if is_stream:
         return StreamingResponse(
             _with_ev_session(
-                stream_and_capture(headers, body, session_id, user_message, model, tool_events, api_url=chat_api_url, project_id=project_id, prompt_meta=prompt_meta, api_format=api_format, api_key=chat_api_key, is_regenerate=is_regenerate, mem_enabled=mem_enabled, record_events=record_events, extract_enabled=extract_enabled, ledger_ctx=ledger_ctx),
+                stream_and_capture(headers, body, session_id, user_message, model, tool_events, api_url=chat_api_url, project_id=project_id, prompt_meta=prompt_meta, api_format=api_format, api_key=chat_api_key, is_regenerate=is_regenerate, mem_enabled=mem_enabled, record_events=record_events, extract_enabled=extract_enabled, ledger_ctx=ledger_ctx, allow_dream=not auxiliary_request),
                 session_id, session_generated,
             ),
             media_type="text/event-stream",
@@ -2751,7 +2809,7 @@ async def chat_completions(request: Request):
                         )
                     )
                 
-                if dream_triggered:
+                if dream_triggered and not auxiliary_request and _chat_dream_allowed(scope=scope):
                     print(f"🌙 检测到 Dream 标记，后台启动 Dream（非流式响应无 SSE 事件）...")
                     _launch_dream_from_marker()
                 return JSONResponse(status_code=200, content=resp_data,
@@ -2771,6 +2829,9 @@ async def _execute_gateway_tool(tool_name: str, arguments: dict, tool_info: dict
     执行网关内置工具（联网搜索、提醒系统等）。
     返回 (result_text, extra_metadata) 元组，extra_metadata 用于 SSE 事件附加信息。
     """
+    from character_tools import project_tool_allowed
+    if not project_tool_allowed(tool_name, tool_info.get("scope")):
+        return '[tool_error] {"code":"project_global_write_forbidden"}', {}
     extra = {}
 
     if tool_name == "_gateway_web_search":
@@ -3082,7 +3143,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
                 print(f"✅ 工具调用后最终回复：直接输出 {len(final_text)} 字符")
 
             assistant_msg = final_text
-            dream_triggered = detect_dream_trigger(assistant_msg)
+            dream_triggered = _chat_dream_allowed(scope=(ledger_ctx or {}).get("scope"), project_id=project_id) and detect_dream_trigger(assistant_msg)
 
             # ---- 收尾补救（数据必活，与 stream_and_capture 同一套）----
             # 模拟流式（yield + sleep）与思考链 yield 都是取消点；spawn 若写在流式之后，断连时永不执行
@@ -3201,7 +3262,7 @@ async def _stream_with_tools(messages, tools, tool_map, model, temperature, tool
 
         # 网关工具（联网搜索等）：各自并发
         async def _run_gw(p):
-            tool_info = tool_map.get(p["name"], {})
+            tool_info = dict(tool_map.get(p["name"], {}), scope=scope)
             result_text, extra_meta = await _execute_gateway_tool(p["name"], p["args"], tool_info)
             tool_results[p["id"]] = result_text
             tool_extras[p["id"]] = extra_meta
@@ -3400,6 +3461,15 @@ def _launch_dream_detached(trigger_type: str = "manual"):
     _spawn_background_task(_bg_dream())
 
 
+def _chat_dream_allowed(*, scope=None, project_id=None):
+    """Markers obey the same immutable project scope as the Dream tool."""
+    from character_tools import project_tool_allowed
+    if scope is None:
+        # Compatibility for internal stream callers without a ledger snapshot.
+        scope = {"context_mode": "live_project" if project_id is not None else "global"}
+    return project_tool_allowed("trigger_dream", scope)
+
+
 def _launch_dream_from_marker():
     """从聊天回复里的 Dream 标记启动一次后台 Dream（非流式路径用）。"""
     _launch_dream_detached("manual")
@@ -3540,8 +3610,9 @@ def _session_headers(session_id: str, generated: bool) -> dict:
     return {"X-Kiwi-Session-Id": session_id} if generated else {}
 
 
-async def stream_and_capture(headers: dict, body: dict, session_id: str, user_message: str, model: str, tool_events: list = None, api_url: str = None, project_id: str = None, prompt_meta: dict = None, api_format: str = "openai", api_key: str = None, is_regenerate: bool = False, mem_enabled: bool = True, record_events: bool = None, extract_enabled: bool = None, ledger_ctx: dict = None):
+async def stream_and_capture(headers: dict, body: dict, session_id: str, user_message: str, model: str, tool_events: list = None, api_url: str = None, project_id: str = None, prompt_meta: dict = None, api_format: str = "openai", api_key: str = None, is_regenerate: bool = False, mem_enabled: bool = True, record_events: bool = None, extract_enabled: bool = None, ledger_ctx: dict = None, allow_dream: bool = True):
     """流式响应 + 捕获完整回复 + 工具事件"""
+    allow_dream = allow_dream and _chat_dream_allowed(scope=(ledger_ctx or {}).get("scope"), project_id=project_id)
     _api_url = api_url or API_BASE_URL
     _usage_total = None  # W2-03：按事件累加归一化 usage，流结束时落账本
 
@@ -3587,7 +3658,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
         if dream_fb_spawned:
             return
         dream_fb_spawned = True
-        if detect_dream_trigger("".join(full_response)):
+        if allow_dream and detect_dream_trigger("".join(full_response)):
             _spawn_background_task(_dream_fallback_after_grace("auto"))
 
     try:
@@ -3696,7 +3767,7 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
     if _reasoning_chunks == 0 and '<think>' in assistant_msg:
         print(f"🔍 [流式完成] ⚠️ 思考链在正文中（<think>标签），前端需要解析")
 
-    dream_triggered = detect_dream_trigger(assistant_msg)
+    dream_triggered = allow_dream and detect_dream_trigger(assistant_msg)
 
     # 记忆行照旧实时出现在聊天里：mem_task 已在 finally 里 spawn；仍用 shield（await 被取消不连带取消 mem_task）
     if mem_task is not None:
@@ -3997,7 +4068,15 @@ async def add_memory_manual(request: Request):
         if not content:
             return JSONResponse(status_code=400, content={"error": "content 不能为空"})
         
-        new_id = await save_memory(content=content, importance=importance, source_session="manual", title=title, category_id=category_id, source="user_explicit")
+        manual_project = body.get("project_id")
+        if "project_id" in body and manual_project is not None:
+            if not isinstance(manual_project, str) or not manual_project.strip() or len(manual_project) > 128:
+                return JSONResponse({"code": "invalid_project_id"}, status_code=400)
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                if not await conn.fetchval("SELECT 1 FROM chat_projects WHERE id=$1", manual_project):
+                    return JSONResponse({"code": "invalid_project_ownership"}, status_code=409)
+        new_id = await save_memory(content=content, importance=importance, source_session="manual", title=title, category_id=category_id, source="user_explicit", project_id=manual_project)
         total = await get_all_memories_count()
         return {"status": "added", "id": new_id, "content": content, "importance": importance, "title": title, "total": total}
     except Exception as e:
@@ -4070,6 +4149,8 @@ async def api_extract_now(request: Request):
             project_id = body.get("project_id")
         except Exception:
             pass
+        if os.getenv("KIWI_CHARACTER_ID") and project_id is not None:
+            return JSONResponse({"code": "project_extraction_not_supported"}, status_code=400)
         extract_interval = await get_extract_interval()
         session_id = "manual-" + str(uuid.uuid4())[:8]
 
@@ -4089,7 +4170,10 @@ async def api_extract_now(request: Request):
             # 获取对比用的已有记忆
             user_text = " ".join(r["content"] for r in recent_msgs if r["role"] == "user")
             related = await search_memories(user_text[:500], limit=50, track_recall=False, project_id=project_id)
-            recent = await get_recent_memories(limit=30, project_id=project_id)
+            if os.getenv("KIWI_CHARACTER_ID") and project_id is None:
+                recent = await get_recent_memories(limit=30, global_only=True)
+            else:
+                recent = await get_recent_memories(limit=30, project_id=project_id)
             seen = set()
             existing_contents = []
             for content in [r["content"] for r in related] + [r["content"] for r in recent]:
@@ -5695,6 +5779,8 @@ async def api_sync_create_conversation(request: Request):
         if warning:
             result["warning"] = warning
         return result
+    except CharacterScopeError as e:
+        return JSONResponse(status_code=e.status, content={"error": e.code, "code": e.code})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -5725,6 +5811,8 @@ async def api_sync_upsert_conversation(conv_id: str, request: Request):
         if stale:
             result["skipped_stale_summaries"] = stale
         return result
+    except CharacterScopeError as e:
+        return JSONResponse(status_code=e.status, content={"error": e.code, "code": e.code})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -5743,6 +5831,8 @@ async def api_sync_patch_conversation(conv_id: str, request: Request):
         if status == "not_found":
             return JSONResponse(status_code=404, content={"error": "对话不存在"})
         return {"status": "ok"}
+    except CharacterScopeError as e:
+        return JSONResponse(status_code=e.status, content={"error": e.code, "code": e.code})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -6013,7 +6103,7 @@ async def api_sync_export():
         # 记忆
         pool = await get_pool()
         async with pool.acquire() as conn:
-            mem_rows = await conn.fetch("SELECT id, content, importance, title, memory_type, source, category_id, created_at FROM memories ORDER BY created_at DESC")
+            mem_rows = await conn.fetch("SELECT id, content, importance, title, memory_type, source, category_id, project_id, created_at FROM memories ORDER BY created_at DESC")
         memories = [_serialize_datetimes(dict(r)) for r in mem_rows]
 
         # 配置
@@ -6031,6 +6121,8 @@ async def api_sync_export():
         # 打包 zip
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("character.json", json.dumps({
+                "character_id": os.getenv("KIWI_CHARACTER_ID", "default"), "format": 1}))
             zf.writestr("conversations.json", json.dumps(convs_full, ensure_ascii=False, indent=2))
             zf.writestr("projects.json", json.dumps(projs, ensure_ascii=False, indent=2))
             zf.writestr("memories.json", json.dumps(memories, ensure_ascii=False, indent=2))
@@ -6082,10 +6174,15 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
         buf.seek(0)
         result = {"conversations": 0, "messages": 0, "projects": 0, "memories": 0,
                   "settings": 0, "config": 0, "failed_conversations": 0,
-                  "filtered_sourceless_handoffs": 0}
+                  "filtered_sourceless_handoffs": 0, "scope_errors": []}
 
         with zipfile.ZipFile(buf, 'r') as zf:
             names = zf.namelist()
+            expected_character = os.getenv("KIWI_CHARACTER_ID", "default")
+            source_character = (json.loads(zf.read("character.json")).get("character_id")
+                                if "character.json" in names else "default")
+            if source_character != expected_character:
+                return JSONResponse({"code": "backup_character_mismatch"}, status_code=409)
 
             # 导入项目
             if "projects.json" in names:
@@ -6104,6 +6201,10 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
                     messages = conv.pop("messages", None)
                     try:
                         filtered = await restore_conversation_from_backup(conv, messages)
+                    except CharacterScopeError as e:
+                        result["failed_conversations"] += 1
+                        result["scope_errors"].append(e.code)
+                        continue
                     except Exception as e:
                         result["failed_conversations"] += 1
                         print(f"event=backup_restore_failed "
@@ -6124,6 +6225,7 @@ async def api_sync_import_backup(file: UploadFile = File(...)):
                             title=mem.get("title", ""),
                             category_id=mem.get("category_id"),
                             source=mem.get("source", "backup_import"),
+                            project_id=mem.get("project_id"),
                         )
                         result["memories"] += 1
                     except Exception:
@@ -6303,6 +6405,10 @@ if os.path.isdir(_panel_dir):
 
 if __name__ == "__main__":
     import uvicorn
+    if os.getenv("KIWI_CHARACTER_ISOLATION", "false").lower() == "true":
+        from character_gateway import create_app
+        uvicorn.run(create_app(), host="0.0.0.0", port=PORT, access_log=False)
+        raise SystemExit(0)
     print(f"🚀 AI Memory Gateway 启动中... 端口 {PORT}")
     print(f"📝 人设长度：{len(SYSTEM_PROMPT)} 字符")
     print(f"🤖 默认模型：{DEFAULT_MODEL}")

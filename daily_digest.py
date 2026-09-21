@@ -129,6 +129,7 @@ async def _run_daily_digest_impl(date_str: str, now_cst, model_override: str = N
             FROM memories
             WHERE COALESCE(memory_type, 'fragment') = 'fragment'
               AND (created_at AT TIME ZONE 'Asia/Shanghai')::date = $1
+              AND project_id IS NULL
             ORDER BY created_at ASC
         """, target_date_obj)
     
@@ -1392,6 +1393,7 @@ async def _render_day_page(date_str: str, messages: list, model_override: str = 
             SELECT title, content FROM memories
             WHERE (created_at AT TIME ZONE 'Asia/Shanghai')::date = $1
               AND memory_type = 'fragment'
+              AND project_id IS NULL
             ORDER BY created_at ASC
         """, target_date_obj)
 

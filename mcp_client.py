@@ -16,6 +16,7 @@ mcp_client.py — MCP 客户端模块（v2）
 """
 
 import json
+import os
 import time
 import asyncio
 from mcp import ClientSession
@@ -54,6 +55,8 @@ async def _connect_and_list(url: str, transport: str = "streamable_http") -> lis
     连接 MCP 服务器并获取工具列表
     返回 MCP Tool 对象列表
     """
+    if os.getenv("KIWI_CHARACTER_ID"):
+        return []  # External transports have no verified character contract yet.
     try:
         if transport == "sse":
             async with sse_client(url) as (read_stream, write_stream):
@@ -173,6 +176,8 @@ async def call_tool(tool_name: str, arguments: dict, tool_map: dict) -> str:
     返回：
       工具执行结果的文本
     """
+    if os.getenv("KIWI_CHARACTER_ID"):
+        return '[tool_error] {"code":"external_mcp_disabled_in_character_mode"}'
     if tool_name not in tool_map:
         return f"错误：未知工具 {tool_name}"
 

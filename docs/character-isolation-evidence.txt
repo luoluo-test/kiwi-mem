@@ -1,0 +1,59 @@
+PASS: legacy data remains usable
+PASS: registry migration repeatable
+PASS: registry migration leaves legacy memory columns unchanged
+PASS: create A independent worker and database
+PASS: create B independent worker and database
+PASS: new A does not inherit default memories
+PASS: new B does not inherit default memories
+PASS: renaming preserves stable character identity
+PASS: captured prompt isolated: READ_A
+PASS: captured prompt isolated: READ_B
+PASS: captured prompt isolated: READ_A_NEW_WINDOW
+PASS: concurrent automatic extraction retained originating role
+PASS: automatic dedup does not duplicate A fact
+PASS: B has no A automatic memories
+PASS: auxiliary model dream markers cannot start Dream
+PASS: auxiliary generation did not record conversations
+PASS: auxiliary has no memory prompt or tools
+PASS: project and character scope both constrain prompt
+PASS: another role's project is rejected before model call
+PASS: reusing a session in another project scope is rejected
+PASS: real memory MCP respects character and global project scope
+PASS: B keyword/vector search cannot return A fact
+PASS: A day page generated
+PASS: A profile isolation after update
+PASS: A Dream completed
+PASS: A Dream output isolated
+PASS: A Dream did not modify B memories or locks
+PASS: B day page generated
+PASS: B profile isolation after update
+PASS: B Dream completed
+PASS: B Dream output isolated
+PASS: Day Page Generation source separation
+PASS: Day Page Generation excludes project foundation
+PASS: User Profile Update source separation
+PASS: User Profile Update excludes project foundation
+PASS: Dream source separation
+PASS: Dream excludes project foundation
+PASS: Day Page Generation source separation
+PASS: Day Page Generation excludes project foundation
+PASS: User Profile Update source separation
+PASS: User Profile Update excludes project foundation
+PASS: Dream source separation
+PASS: Dream excludes project foundation
+PASS: automatic contradiction detection invalidates A old fact
+PASS: contradiction does not invalidate same-ID B fact
+PASS: contradiction edges never enter B
+PASS: A backup rejected by B
+PASS: backup records role
+PASS: backup retains project ownership
+PASS: same numeric memory ID in B survives A deletion
+PASS: same session ID in B survives A deletion
+PASS: delete role stops worker and retains database
+PASS: deleted role never falls back
+PASS: B survives A role deletion
+PASS: supervisor restart eagerly restores only active roles
+PASS: B persisted memories survive supervisor restart
+PASS: role deletion tombstone survives restart
+PASS: SQL proves disposable database cleanup
+PASS: 58 character PostgreSQL guards; real workers, MOCK provider, no real model calls
