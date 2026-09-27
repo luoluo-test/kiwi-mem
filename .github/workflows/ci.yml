@@ -79,8 +79,10 @@ jobs:
           python scripts/test_character_tool_scope.py
           python scripts/test_character_dream_scope.py
           python scripts/test_character_lifecycle.py
+          python scripts/test_character_purge.py
           python scripts/test_character_update_guard.py
           node scripts/test_character_panel.mjs
+          node scripts/test_character_manager.mjs
 
       - name: 运行 S1-S6 永久真库行为守卫
         run: python scripts/test_kiwi_safety_sync.py
@@ -88,6 +90,7 @@ jobs:
       - name: 角色隔离真库与进程守卫（模拟模型）
         run: |
           python scripts/test_character_postgres.py
+          python scripts/test_character_purge_postgres.py
           python scripts/test_character_scope_regressions.py
           python scripts/test_character_extraction.py
           python scripts/test_float_dream.py
