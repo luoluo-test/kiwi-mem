@@ -8,8 +8,6 @@ body{font:16px/1.6 system-ui,sans-serif;max-width:850px;margin:48px auto;padding
 h1{font-size:28px}form,article{padding:20px;background:white;border:1px solid #dce5dc;border-radius:12px;margin:16px 0}
 label{display:block;margin:8px 0}input,button{font:inherit;padding:8px;border:1px solid #a8bba9;border-radius:6px}
 button,a{cursor:pointer}button{background:#e5f1df}small{display:block;color:#526753}article a{margin-left:16px}#status{white-space:pre-wrap}
-button.danger{background:#fff0ed;color:#922e22;border-color:#dca99f}button:disabled{cursor:wait;opacity:.6}
-article[aria-busy="true"]{border-color:#a8bba9}a[aria-disabled="true"]{color:#6c766c;cursor:wait;text-decoration:none}
 </style>
 <h1>🥝 Kiwi-Mem 角色管理</h1>
 <p>每个角色拥有独立记忆、日历、画像和 Dream。打开角色面板后，该页签始终属于这个角色。</p>
@@ -25,141 +23,36 @@ article[aria-busy="true"]{border-color:#a8bba9}a[aria-disabled="true"]{color:#6c
 <script type="module">
 const status = document.querySelector('#status');
 const roles = document.querySelector('#roles');
-const pending = new Map();
-const deleted = new Set();
-let characters = [];
-let refreshGeneration = 0;
-const errors = {
-  default_character_protected: 'default 保存旧数据及角色注册表，不可删除。',
-  character_purge_failed: '角色删除未完成，请检查服务日志后重试。',
-  character_purge_interrupted: '角色删除被中断，请重试以继续删除。',
-  character_purge_confirmation_required: '请重新输入完整角色 ID 确认删除。',
-  character_database_identity_invalid: '角色数据库归属校验失败，已停止删除。请联系管理员检查注册表。',
-  character_deleted: '该角色已停用或删除。',
-  character_deletion_in_progress: '该角色正在删除，请稍后刷新列表。',
-  character_not_found: '角色不存在，请刷新列表。',
-  character_not_ready: '角色尚未就绪，请稍后重试。',
-  character_exists: '该角色 ID 已使用，请选择另一个 ID。',
-  character_capacity_reached: '角色数量已达上限。',
-  character_mismatch: '请求中的角色身份不一致，操作已取消。',
-  invalid_character_id: '角色 ID 格式不正确。',
-  invalid_character_name: '请填写有效的角色名称。',
-  character_service_unavailable: '角色服务暂时不可用，请稍后重试。',
-  character_supervisor_unavailable: '角色管理服务暂时不可用，请稍后重试。',
-};
-function responseError(data, httpStatus) {
-  const code = typeof data?.code === 'string' ? data.code : '';
-  return errors[code] || `请求失败（HTTP ${httpStatus}）。请稍后重试或检查服务日志。`;
-}
 async function request(path, options) {
-  let r;
-  try { r = await fetch(path, options); }
-  catch { throw new Error('网络连接失败，操作结果尚未确认。请检查连接并刷新列表后重试。'); }
-  let data;
-  try { data = await r.json(); }
-  catch { throw new Error(`服务返回了无法读取的响应（HTTP ${r.status}）。请刷新列表后重试。`); }
-  if (!r.ok) throw new Error(responseError(data, r.status));
+  const r = await fetch(path, options);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.code || '请求失败');
   return data;
 }
 async function refresh() {
-  const generation = ++refreshGeneration;
   const data = await request('/characters');
-  if (generation !== refreshGeneration) return;
-  if (!Array.isArray(data?.characters)) throw new Error('角色列表响应格式不正确，请刷新页面重试。');
-  characters = data.characters;
-  render();
-}
-async function purge(role) {
-  if (role.id === 'default' || pending.has(role.id) || deleted.has(role.id)) return;
-  const confirmation = prompt(
-    `永久删除角色：${role.name}\n角色 ID：${role.id}\n\n` +
-    '将删除该角色的所有记忆与向量、聊天记录、项目与文件片段、画像、日历、Dream、提醒及角色配置，并停止该角色的工作进程。\n' +
-    '此操作不可恢复。源码检查点不是数据备份；已有外部备份不会被删除。\n\n' +
-    '请输入完整角色 ID 确认永久删除（区分大小写，不添加空格）：', '');
-  if (confirmation === null) return;
-  if (confirmation !== role.id) {
-    status.textContent = '输入的角色 ID 不匹配，未执行删除。';
-    return;
-  }
-  pending.set(role.id, 'deleting');
-  render();
-  status.textContent = `正在永久删除角色 ${role.name}（${role.id}），请等待服务器确认…`;
-  let message;
-  try {
-    const data = await request(`/characters/${encodeURIComponent(role.id)}/purge`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({confirm_character_id:role.id}),
-    });
-    if (data?.status !== 'deleted' || data?.data_retained !== false) {
-      throw new Error('服务器尚未确认删除完成，请刷新列表后重试。');
-    }
-    deleted.add(role.id);
-    message = `角色 ${role.name}（${role.id}）已永久删除。`;
-  } catch (e) {
-    message = `删除未完成：${e.message}`;
-  }
-  // Re-read the durable state even after an uncertain HTTP/network result.
-  // A confirmed success stays hidden if this refresh fails or returns stale data.
-  try { await refresh(); }
-  catch (e) { message += `\n列表刷新失败：${e.message}`; }
-  finally {
-    pending.delete(role.id);
-    render();
-    status.textContent = message;
-  }
-}
-function render() {
   roles.replaceChildren();
-  for (const role of characters) {
-    if (role.state === 'deleted' || deleted.has(role.id)) continue;
-    const busy = pending.has(role.id);
+  for (const role of data.characters) {
     const card = document.createElement('article');
-    card.setAttribute('aria-busy', String(busy));
     const title = document.createElement('strong');
     title.textContent = `${role.name} · ${role.id} · ${role.state}`;
     card.append(title);
     if (role.state === 'active') {
       const link = document.createElement('a');
-      if (!busy) link.href = `/characters/${encodeURIComponent(role.id)}/admin/`;
-      else link.setAttribute('aria-disabled', 'true');
-      link.onclick = event => { if (pending.has(role.id) || deleted.has(role.id)) event.preventDefault(); };
+      link.href = `/characters/${encodeURIComponent(role.id)}/admin/`;
       link.textContent = '打开此角色面板';
       card.append(link);
       const rename = document.createElement('button');
       rename.textContent = '改名';
-      rename.disabled = busy;
       rename.onclick = async () => {
-        if (pending.has(role.id) || deleted.has(role.id)) return;
         const name = prompt('新的显示名称（ID 保持不变）', role.name);
         if (!name) return;
-        pending.set(role.id, 'renaming');
-        render();
         try {
           await request(`/characters/${encodeURIComponent(role.id)}`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
           await refresh();
         } catch (e) { status.textContent = e.message; }
-        finally { pending.delete(role.id); render(); }
       };
       card.append(' ', rename);
-    }
-    if (role.id === 'default') {
-      const note = document.createElement('small');
-      note.textContent = 'default 保存旧数据及角色注册表，不可删除。';
-      card.append(note);
-    } else if (['active', 'disabled', 'deleting'].includes(role.state)) {
-      const remove = document.createElement('button');
-      remove.className = 'danger';
-      remove.disabled = busy;
-      remove.textContent = pending.get(role.id) === 'deleting' ? '正在删除…' :
-        role.state === 'deleting' ? (role.deletion_error ? '重试永久删除' : '继续永久删除') : '永久删除';
-      remove.onclick = () => purge(role);
-      card.append(' ', remove);
-      if (role.state === 'deleting') {
-        const note = document.createElement('small');
-        note.textContent = role.deletion_error ? '上次删除未完成，角色已停止接收请求。可重试永久删除。' :
-          '正在删除，角色已停止接收请求。可继续删除以确认完成。';
-        card.append(note);
-      }
     }
     roles.append(card);
   }

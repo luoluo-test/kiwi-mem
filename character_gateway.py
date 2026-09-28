@@ -130,24 +130,6 @@ class Registry:
             VALUES ('default','Default (legacy)',current_database(),'active')
             ON CONFLICT (id) DO NOTHING
         """)
-        # DDL deletion cannot share a transaction with its registry receipt.
-        # Persist its intent and original database identity before any DROP.
-        async with self.conn.transaction():
-            await self.conn.execute("""
-                ALTER TABLE kiwi_characters ADD COLUMN IF NOT EXISTS database_oid OID;
-                ALTER TABLE kiwi_characters ADD COLUMN IF NOT EXISTS deletion_error TEXT;
-                ALTER TABLE kiwi_characters ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-                ALTER TABLE kiwi_characters DROP CONSTRAINT IF EXISTS kiwi_characters_state_check;
-                ALTER TABLE kiwi_characters ADD CONSTRAINT kiwi_characters_state_check
-                    CHECK (state IN ('provisioning','active','disabled','deleting','deleted'));
-            """)
-            # Never rebind a deleting/deleted row after a failed DROP receipt.
-            # A database recreated with the same name must not be erased on retry.
-            await self.conn.execute("""
-                UPDATE kiwi_characters c SET database_oid=d.oid
-                FROM pg_database d WHERE c.database_name=d.datname AND c.database_oid IS NULL
-                    AND c.state IN ('provisioning','active','disabled')
-            """)
         async with self.lock:
             # A crash between CREATE DATABASE and activation is safely repeatable.
             for row in await self.conn.fetch("SELECT * FROM kiwi_characters WHERE state='provisioning'"):
@@ -161,8 +143,7 @@ class Registry:
         if not exists:
             # Never template from legacy memory. Names are generated, never client SQL.
             await self.conn.execute(f'CREATE DATABASE "{name}" TEMPLATE template0')
-        await self.conn.execute("""UPDATE kiwi_characters SET state='active',
-            database_oid=(SELECT oid FROM pg_database WHERE datname=$2) WHERE id=$1""", row["id"], name)
+        await self.conn.execute("UPDATE kiwi_characters SET state='active' WHERE id=$1", row["id"])
 
     async def list(self):
         async with self.lock:
@@ -173,10 +154,8 @@ class Registry:
             row = await self.conn.fetchrow("SELECT * FROM kiwi_characters WHERE id=$1", cid)
         if row is None:
             raise CharacterError("character_not_found", 404)
-        if row["state"] in ("disabled", "deleted"):
+        if row["state"] == "disabled":
             raise CharacterError("character_deleted", 410)
-        if row["state"] == "deleting":
-            raise CharacterError("character_deletion_in_progress", 409)
         if row["state"] != "active":
             raise CharacterError("character_not_ready", 503)
         return dict(row)
@@ -185,7 +164,7 @@ class Registry:
         async with self.lock:
             if await self.conn.fetchval("SELECT 1 FROM kiwi_characters WHERE id=$1", cid):
                 raise CharacterError("character_exists", 409)
-            count = await self.conn.fetchval("SELECT count(*) FROM kiwi_characters WHERE state IN ('active','provisioning')")
+            count = await self.conn.fetchval("SELECT count(*) FROM kiwi_characters WHERE state <> 'disabled'")
             if count >= int(os.getenv("KIWI_MAX_CHARACTERS", "16")):
                 raise CharacterError("character_capacity_reached", 409)
             dbname = "kiwi_char_" + uuid.uuid4().hex
@@ -205,90 +184,9 @@ class Registry:
         if cid == "default":
             raise CharacterError("default_character_protected", 409)
         async with self.lock:
-            row = await self.conn.fetchrow("SELECT state FROM kiwi_characters WHERE id=$1", cid)
-            if row is None:
-                raise CharacterError("character_not_found", 404)
-            if row["state"] == "deleted":
-                raise CharacterError("character_deleted", 410)
-            if row["state"] == "deleting":
-                raise CharacterError("character_deletion_in_progress", 409)
-            await self.conn.execute("UPDATE kiwi_characters SET state='disabled' WHERE id=$1", cid)
-
-    async def _validate_purge_database(self, conn, row):
-        """Only erase the original, uniquely registered, service-owned role DB."""
-        name = row["database_name"]
-        if row["id"] == "default" or not re.fullmatch(r"kiwi_char_[0-9a-f]{32}", name):
-            raise CharacterError("character_database_identity_invalid", 409)
-        registered = await conn.fetchrow(
-            "SELECT database_name,database_oid FROM kiwi_characters WHERE id=$1", row["id"])
-        scope = await conn.fetchrow("""SELECT current_database() AS registry_database,
-            (SELECT database_name FROM kiwi_characters WHERE id='default') AS default_database,
-            (SELECT count(*) FROM kiwi_characters WHERE database_name=$1) AS mappings""", name)
-        if (registered is None or registered["database_name"] != name
-                or registered["database_oid"] != row["database_oid"] or scope["mappings"] != 1
-                or name in (scope["registry_database"], scope["default_database"], "postgres", "template0", "template1")):
-            raise CharacterError("character_database_identity_invalid", 409)
-        target = await conn.fetchrow("""SELECT oid,datistemplate,
-            pg_get_userbyid(datdba)=current_user AS owned FROM pg_database WHERE datname=$1""", name)
-        if target is None:
-            return False  # A previous attempt may have dropped it before losing its receipt.
-        if target["oid"] != row["database_oid"] or target["datistemplate"] or not target["owned"]:
-            raise CharacterError("character_database_identity_invalid", 409)
-        return True
-
-    async def begin_purge(self, cid):
-        validate_character(cid)
-        if cid == "default":
-            raise CharacterError("default_character_protected", 409)
-        self.require_lease()
-        async with self.lock:
-            self.require_lease()
-            row = await self.conn.fetchrow("SELECT * FROM kiwi_characters WHERE id=$1", cid)
-            if row is None:
-                raise CharacterError("character_not_found", 404)
-            if row["state"] == "deleted":
-                return dict(row)
-            await self._validate_purge_database(self.conn, row)
-            row = await self.conn.fetchrow("""UPDATE kiwi_characters SET state='deleting'
-                WHERE id=$1 RETURNING *""", cid)
-            return dict(row)
-
-    async def drop_character_database(self, row):
-        self.require_lease()
-        # Do not hold registry.lock or borrow its lease connection for slow DDL:
-        # other characters must continue receiving heartbeats during deletion.
-        conn = await asyncpg.connect(self.dsn, timeout=5, command_timeout=20)
-        try:
-            exists = await self._validate_purge_database(conn, row)
-            self.require_lease()
-            if exists:
-                name = row["database_name"]  # Strictly validated server-generated SQL identifier.
-                await conn.execute(f'ALTER DATABASE "{name}" ALLOW_CONNECTIONS false')
-                self.require_lease()
-                await conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-            if await conn.fetchval("SELECT 1 FROM pg_database WHERE datname=$1", row["database_name"]):
-                raise CharacterError("character_purge_failed", 503)
-        finally:
-            await conn.close(timeout=5)
-
-    async def finish_purge(self, cid):
-        self.require_lease()
-        async with self.lock:
-            self.require_lease()
-            result = await self.conn.execute("""UPDATE kiwi_characters
-                SET state='deleted',name='',deletion_error=NULL,deleted_at=now()
-                WHERE id=$1 AND state='deleting'""", cid)
-            if result != "UPDATE 1":
-                raise CharacterError("character_purge_failed", 503)
-
-    async def record_purge_error(self, cid, code):
-        self.require_lease()
-        # Controlled codes only: never persist an exception containing a DSN.
-        if code not in {"character_database_identity_invalid", "character_purge_interrupted"}:
-            code = "character_purge_failed"
-        async with self.lock:
-            await self.conn.execute("""UPDATE kiwi_characters SET deletion_error=$2
-                WHERE id=$1 AND state='deleting'""", cid, code)
+            result = await self.conn.execute("UPDATE kiwi_characters SET state='disabled' WHERE id=$1", cid)
+        if result == "UPDATE 0":
+            raise CharacterError("character_not_found", 404)
 
     async def close(self):
         if self.conn:
@@ -301,7 +199,6 @@ class WorkerManager:
         self.workers = {}
         self.locks = {}
         self.recoveries = {}
-        self.purges = {}
         self._closing = False
         self._closed = False
         self._close_lock = asyncio.Lock()
@@ -341,7 +238,6 @@ class WorkerManager:
             try:
                 for _ in range(240):
                     self._require_running()
-                    await self.registry.get(cid)  # A purge can freeze an in-progress startup.
                     if process.returncode is not None:
                         break
                     try:
@@ -387,53 +283,6 @@ class WorkerManager:
             await self.registry.disable(cid)
             await self._stop(cid)
 
-    async def purge(self, cid):
-        self._require_running()
-        # Freeze new requests before waiting on a slow worker startup/stop lock.
-        row = await self.registry.begin_purge(cid)
-        if row["state"] == "deleted":
-            return
-        self._require_running()
-        task = self.purges.get(cid)
-        if task is None or task.done():
-            task = asyncio.create_task(self._purge(row))
-            self.purges[cid] = task
-
-            def finished(done):
-                if self.purges.get(cid) is done:
-                    self.purges.pop(cid, None)
-                if not done.cancelled():
-                    done.exception()  # Consume failures even when the HTTP caller disconnected.
-
-            task.add_done_callback(finished)
-        await asyncio.shield(task)
-
-    async def _purge(self, row):
-        cid = row["id"]
-        try:
-            async with self.locks.setdefault(cid, asyncio.Lock()):
-                self._require_running()
-                # Another completed purge may have won while this request waited.
-                row = await self.registry.begin_purge(cid)
-                if row["state"] == "deleted":
-                    return
-                await self._stop(cid)
-                self._require_running()
-                await self.registry.drop_character_database(row)
-                self._require_running()
-                await self.registry.finish_purge(cid)
-        except (Exception, asyncio.CancelledError) as exc:
-            code = ("character_purge_interrupted" if isinstance(exc, asyncio.CancelledError)
-                    else "character_database_identity_invalid" if isinstance(exc, CharacterError)
-                    and exc.code == "character_database_identity_invalid" else "character_purge_failed")
-            try:
-                await asyncio.wait_for(self.registry.record_purge_error(cid, code), timeout=5)
-            except Exception:
-                pass  # Durable deleting state already prevents access after lease loss.
-            if isinstance(exc, asyncio.CancelledError):
-                raise
-            raise CharacterError(code, 409 if code == "character_database_identity_invalid" else 503) from None
-
     async def close(self):
         async with self._close_lock:
             if self._closed:
@@ -443,10 +292,6 @@ class WorkerManager:
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
-            purges = list(self.purges.values())
-            for task in purges:
-                task.cancel()
-            await asyncio.gather(*purges, return_exceptions=True)
 
             async def stop_locked(cid):
                 # A request may still be starting this worker. It sees _closing
@@ -467,12 +312,9 @@ class WorkerManager:
                                       headers={"X-Kiwi-Worker-Token": worker["token"]}, timeout=5)
             except httpx.HTTPError:
                 pass
-        async def recover(cid, *, deleting=False):
+        async def recover(cid):
             try:
-                if deleting:
-                    await self.purge(cid)
-                else:
-                    await self.get(cid)
+                await self.get(cid)
             except Exception:
                 pass  # Remain unavailable; retry next heartbeat, never change roles.
 
@@ -495,17 +337,11 @@ class WorkerManager:
                         and (not task or task.done())):
                     # A slow restart must not starve leases of healthy workers.
                     self.recoveries[cid] = asyncio.create_task(recover(cid))
-                elif row["state"] == "deleting" and (not task or task.done()):
-                    # One failed deletion must not block healthy roles or service startup.
-                    self.recoveries[cid] = asyncio.create_task(recover(cid, deleting=True))
             await asyncio.sleep(5)
 
 
 def public_character(row):
-    result = {k: row[k] for k in ("id", "name", "state")}
-    if row["state"] == "deleting":
-        result["deletion_error"] = row.get("deletion_error")
-    return result
+    return {k: row[k] for k in ("id", "name", "state")}
 
 
 def _terminate_supervisor():
@@ -627,15 +463,6 @@ def create_app(registry=None, manager=None, *, shutdown=None):
         await request_identity(request, cid)
         await manager.disable(validate_character(cid))
         return {"status": "disabled", "data_retained": True}
-
-    @app.post("/characters/{cid}/purge")
-    async def purge_character(cid: str, request: Request):
-        _, _, body = await request_identity(request, cid)
-        if (not isinstance(body, dict) or set(body) != {"confirm_character_id"}
-                or body["confirm_character_id"] != cid):
-            raise CharacterError("character_purge_confirmation_required", 400)
-        await manager.purge(validate_character(cid))
-        return {"status": "deleted", "data_retained": False}
 
     async def proxy(request, path, path_id=None):
         headers = request.headers
