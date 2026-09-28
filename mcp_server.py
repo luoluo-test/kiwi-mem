@@ -26,7 +26,7 @@ from character_tools import execute_memory_tool
 # 配置
 # ============================================================
 
-GATEWAY_PORT = int(os.getenv("PORT", "8080"))
+GATEWAY_PORT = int(os.getenv("PORT", "").strip() or "8080")
 GATEWAY_BASE = f"http://127.0.0.1:{GATEWAY_PORT}"
 MCP_AUTH_TOKEN = os.getenv("MCP_AUTH_TOKEN", "")
 

@@ -703,4 +703,4 @@ def create_app(registry=None, manager=None, *, shutdown=None):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(create_app(), host="0.0.0.0", port=int(os.getenv("PORT", "8080")), access_log=False)
+    uvicorn.run(create_app(), host="0.0.0.0", port=int(os.getenv("PORT", "").strip() or "8080"), access_log=False)

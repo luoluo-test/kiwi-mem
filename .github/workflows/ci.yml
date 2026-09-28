@@ -62,6 +62,7 @@ jobs:
 
       - name: 运行既有开源回归脚本
         run: |
+          python scripts/test_port_config.py
           python scripts/test_drawer_stability.py
           python scripts/test_gateway_tool_streaming.py
           python scripts/test_stream_capture.py
