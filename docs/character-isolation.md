@@ -132,7 +132,6 @@ JSON 媒体类型不区分大小写，支持 `application/json`、`application/*
 | 查询指定角色 | `GET /characters/A` |
 | 改名，ID 不变 | `PATCH /characters/A`，`{"name":"新名字"}` |
 | 停用角色并停止后台进程 | `DELETE /characters/A`；200，`data_retained:true` |
-| 永久删除角色与全部库内数据 | `POST /characters/A/purge`，`{"confirm_character_id":"A"}`；200，`status:deleted`、`data_retained:false` |
 | 聊天 | `POST /characters/A/v1/chat/completions`，标准 OpenAI 请求体 |
 | 查看/检索记忆 | `GET /characters/A/debug/memories?q=关键词&limit=20` |
 | 添加记忆 | `POST /characters/A/debug/memories`，`{"content":"独有事实","title":"标题","importance":7}` |
@@ -202,8 +201,6 @@ JSON 媒体类型不区分大小写，支持 `application/json`、`application/*
 | 路径/请求头/JSON 角色冲突 | 409 `character_mismatch` |
 | 未创建角色 | 404 `character_not_found` |
 | 已停用角色 | 410 `character_deleted` |
-| 已永久删除角色 | 410 `character_deleted` |
-| 删除中角色 | 409 `character_deletion_in_progress`；仅允许查询列表或重试永久删除 |
 | 重复创建/已达容量限制 | 409 `character_exists` / `character_capacity_reached` |
 | 项目归属不合法 | 409 `invalid_project_ownership` |
 | 已绑定会话被用于其他项目 | 409 `session_project_mismatch` |
@@ -218,12 +215,8 @@ JSON 媒体类型不区分大小写，支持 `application/json`、`application/*
 
 - 删除会话仅在当前角色执行上游对话/消息/墓碑语义；不会自动承诺删除所有已派生记忆，须按上游来源与删除规则处理。
 - 删除记忆仅影响当前角色；锁定保护仍有效。清空/重置接口也只影响当前角色。
-- 原 `DELETE /characters/{id}` 仍为**停用归档**：停止进程、拒绝后续访问，保留库和 ID 墓碑；default 禁止停用。
-- 角色管理页的“永久删除”使用独立 `POST /characters/{id}/purge`，只接受精确匹配的 `confirm_character_id`。
-  停止 worker 后删除该角色整个独立数据库，包含全局/项目记忆、所有向量、Dream、日历、画像、配置及 float 事件收据。
-  `default` 同库保存注册表，禁止永久删除。仅保留最小 ID/原库身份/时间墓碑，角色名称清空，ID 不可复用。
-  删除失败保持 `deleting` 并拒绝业务访问，重试或重启继续清理；仅确认库不存在后返回删除成功。
-  归档恢复接口仍未实现。数据备份、数据库权限、迁移和恢复边界见 [角色永久删除](character-permanent-deletion.md)。
+- 删除角色为**停用归档**：停止进程、拒绝后续访问，保留库和 ID 墓碑。不自动 DROP DATABASE；default 禁止停用。
+  永久擦除与恢复归档角色接口尚未实现，需管理员在备份后另行安排。
 - JSON 批量导入中的归属冲突计入 `rejected`，以 `session_project_mismatch` / `invalid_project_ownership` 等受控码报告；其他实体可继续导入。
 - ZIP 按对话事务恢复，归属冲突不改该会话及其消息、墓碑；计入 `failed_conversations` 与 `scope_errors`。客户端必须检查计数，不能只看 HTTP 200。
 - ZIP 增加 `character.json`。A 的包不能导入 B；无此文件的旧包仅可导入 default。
@@ -244,7 +237,7 @@ JSON 媒体类型不区分大小写，支持 `application/json`、`application/*
    旧单角色启动不受此限制。未来接入外部工具必须先明确角色隔离和副作用范围。
 5. 客户端工具列表与网关工具列表在部分流式路径没有完整合并，仍为独立兼容性待办；不能据此声称 float 全部工具已兼容。
 6. 项目自动提取、项目日历/项目 Dream 尚未新增；原角色内全局认知层与项目私有层的合同继续保留。
-7. 用户级认证授权、横向扩容、完整事件导入、生产监控与容量测试尚未完成。非 default 角色永久擦除已在后续增量补充，见上文独立接口。
+7. 用户级认证授权、横向扩容、永久角色擦除、完整事件导入、生产监控与容量测试尚未完成。
 
 本地验证记录见 [character-isolation-verification.md](character-isolation-verification.md)。
 
